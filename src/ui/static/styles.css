@@ -1,0 +1,8 @@
+:root { --bg:#0b1020; --card:#121a30cc; --text:#e8eefc; --brand:#8b5cf6; --accent:#06b6d4; }
+*{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui;background:radial-gradient(circle at 20% 20%, #1c2752, var(--bg));color:var(--text)}
+.aurora{position:fixed;inset:0;background:conic-gradient(from 120deg at 70% 20%, #8b5cf633, #06b6d433, transparent 50%);filter:blur(50px);pointer-events:none}
+.shell{max-width:980px;margin:3rem auto;padding:1rem}
+.card{background:var(--card);padding:2rem;border:1px solid #ffffff22;border-radius:20px;backdrop-filter: blur(8px)}
+input,select,button{display:block;width:100%;margin:0.6rem 0;padding:0.75rem;border-radius:12px;border:1px solid #2a3559;background:#0f1730;color:var(--text)}
+button{background:linear-gradient(90deg,var(--brand),var(--accent));border:none;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(140px,1fr));gap:1rem}.tile{display:block;padding:2rem;border-radius:16px;background:#151f3e;color:var(--text);text-decoration:none}

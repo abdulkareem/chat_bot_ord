@@ -1,13 +1,10 @@
-import postgres from 'postgres';
+import postgres from 'postgres/cf';
 
-let sql;
 export function getDb(env) {
-  if (!sql) {
-    sql = postgres(env.DATABASE_URL, {
-      max: 10,
-      connect_timeout: 10,
-      idle_timeout: 20
-    });
-  }
-  return sql;
+  return postgres(env.DATABASE_URL, {
+    fetch,
+    max: 1,
+    idle_timeout: 0,
+    connect_timeout: 10
+  });
 }

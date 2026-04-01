@@ -8,6 +8,13 @@ import { expireSubscriptions } from './services/subscription.js';
 import { pushDailyInsight } from './cron/analytics.js';
 import { STYLE_CSS } from './ui/static/styles.js';
 
+
+function validateRequiredEnv(env) {
+  const required = ['DATABASE_URL', 'JWT_SECRET', 'CHAT_MAX_FILE_BYTES', 'CHAT_FILE_TTL_MS'];
+  const missing = required.filter((key) => !env[key]);
+  return missing;
+}
+
 const routes = [
   ['POST', '/auth/login', api.login],
   ['POST', '/onboarding/verify', api.onboardingVerify],
@@ -34,6 +41,12 @@ export default {
     if (url.pathname === '/home') return html(homeScreen());
     if (url.pathname === '/chat') return html(chatScreen());
     if (url.pathname === '/static/styles.css') return new Response(STYLE_CSS, { headers: { 'content-type': 'text/css; charset=utf-8' } });
+
+    if (url.pathname === '/test') {
+      const missing = validateRequiredEnv(env);
+      if (missing.length) return json({ ok: false, missing }, 500);
+      return json({ ok: true, service: 'vyntarochat' });
+    }
 
     if (url.pathname.startsWith('/realtime/')) {
       const roomId = url.pathname.split('/').at(-1);

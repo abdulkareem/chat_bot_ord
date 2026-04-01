@@ -1,6 +1,7 @@
-name = "hyperlocal-chat-platform"
+name = "vyntarochat"
 main = "src/worker.js"
 compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
 
 [triggers]
 crons = ["*/15 * * * *"]
@@ -14,6 +15,7 @@ tag = "v1"
 new_sqlite_classes = ["ChatRoomDO"]
 
 [vars]
+DATABASE_URL = "postgresql://change-me"
 JWT_SECRET = "change-me"
 OTP_TEST_BYPASS = "000000"
 CHAT_MAX_FILE_BYTES = "2097152"

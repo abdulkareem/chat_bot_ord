@@ -10,6 +10,160 @@ import { detectSoftOrder } from '../services/orders.js';
 
 async function parse(req) { return req.json(); }
 
+const SUPER_ADMIN_EMAIL = 'abdulkareem.t@gmail.com';
+const OTP_WINDOW_MINUTES = 10;
+const OTP_MAX_REQUESTS = 3;
+const OTP_EXPIRY_MINUTES = 5;
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function generateSixDigitOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+export async function sendEmailOTP(email, otp, env) {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: 'PulseLane <no-reply@aureliv.in>',
+      to: email,
+      subject: 'Your VyntaroChat Admin OTP',
+      html: `<h2>Your OTP is: ${otp}</h2><p>Valid for 5 minutes</p>`
+    })
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`resend error: ${res.status} ${text}`);
+  }
+}
+
+function generateAdminToken(email, env) {
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + (7 * 24 * 60 * 60);
+  return signToken({ email, role: 'superadmin', iat: now, exp }, env.JWT_SECRET);
+}
+
+async function requireSuperAdmin(req, env) {
+  const auth = await requireAuth(req, env);
+  if (!auth) return { error: json({ error: 'unauthorized' }, 401) };
+  if (auth.exp && Math.floor(Date.now() / 1000) > Number(auth.exp)) {
+    return { error: json({ error: 'token expired' }, 401) };
+  }
+  if (auth.role !== 'superadmin' || normalizeEmail(auth.email) !== SUPER_ADMIN_EMAIL) {
+    return { error: json({ error: 'forbidden' }, 403) };
+  }
+  return { auth };
+}
+
+export async function adminSendOtp(req, env) {
+  const sql = getDb(env);
+  const { email } = await parse(req);
+  const normalizedEmail = normalizeEmail(email);
+
+  if (normalizedEmail !== SUPER_ADMIN_EMAIL) return json({ error: 'invalid admin email' }, 403);
+  if (!env.RESEND_API_KEY) return json({ error: 'resend not configured' }, 500);
+
+  const [rate] = await sql`
+    SELECT COUNT(*)::int AS count
+    FROM admin_otps
+    WHERE email = ${normalizedEmail}
+      AND created_at >= NOW() - (${OTP_WINDOW_MINUTES} * INTERVAL '1 minute')
+  `;
+
+  if (rate.count >= OTP_MAX_REQUESTS) {
+    return json({ error: 'too many otp requests, try again later' }, 429);
+  }
+
+  const otp = generateSixDigitOtp();
+  await sql`
+    INSERT INTO admin_otps (email, otp, expires_at, used)
+    VALUES (${normalizedEmail}, ${otp}, NOW() + (${OTP_EXPIRY_MINUTES} * INTERVAL '1 minute'), false)
+  `;
+
+  await sendEmailOTP(normalizedEmail, otp, env);
+  return json({ ok: true, message: 'otp sent' });
+}
+
+export async function adminVerifyOtp(req, env) {
+  const sql = getDb(env);
+  const { email, otp } = await parse(req);
+  const normalizedEmail = normalizeEmail(email);
+
+  if (normalizedEmail !== SUPER_ADMIN_EMAIL) return json({ error: 'invalid admin email' }, 403);
+  if (!/^\d{6}$/.test(String(otp || ''))) return json({ error: 'invalid otp format' }, 400);
+
+  const [row] = await sql`
+    SELECT id, email, otp, expires_at, used
+    FROM admin_otps
+    WHERE email = ${normalizedEmail}
+      AND otp = ${String(otp)}
+      AND used = false
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  if (!row) return json({ error: 'otp invalid' }, 401);
+  if (new Date(row.expires_at).getTime() < Date.now()) return json({ error: 'otp expired' }, 401);
+
+  await sql`UPDATE admin_otps SET used = true WHERE id = ${row.id}`;
+  const token = await generateAdminToken(normalizedEmail, env);
+  return json({ token, role: 'superadmin', email: normalizedEmail });
+}
+
+export async function adminUsers(req, env) {
+  const sql = getDb(env);
+  const guard = await requireSuperAdmin(req, env);
+  if (guard.error) return guard.error;
+
+  const users = await sql`SELECT id, name, phone, role, is_verified, verification_status, created_at FROM users ORDER BY created_at DESC LIMIT 200`;
+  return json({ items: users });
+}
+
+export async function adminChats(req, env) {
+  const sql = getDb(env);
+  const guard = await requireSuperAdmin(req, env);
+  if (guard.error) return guard.error;
+
+  const chats = await sql`SELECT id, user_a, user_b, created_at, updated_at FROM chats ORDER BY updated_at DESC LIMIT 200`;
+  return json({ items: chats });
+}
+
+export async function adminSubscriptions(req, env) {
+  const sql = getDb(env);
+  const guard = await requireSuperAdmin(req, env);
+  if (guard.error) return guard.error;
+
+  const subscriptions = await sql`
+    SELECT id, user_id, role, plan_type, total_amount, start_date, end_date, status, verified, created_at
+    FROM subscriptions
+    ORDER BY created_at DESC
+    LIMIT 200
+  `;
+  return json({ items: subscriptions });
+}
+
+export async function adminAnalytics(req, env) {
+  const sql = getDb(env);
+  const guard = await requireSuperAdmin(req, env);
+  if (guard.error) return guard.error;
+
+  const [stats] = await sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM users) AS users,
+      (SELECT COUNT(*)::int FROM chats) AS chats,
+      (SELECT COUNT(*)::int FROM messages) AS messages,
+      (SELECT COUNT(*)::int FROM subscriptions WHERE status = 'active') AS active_subscriptions
+  `;
+  return json({ analytics: stats });
+}
+
 export async function login(req, env) {
   const sql = getDb(env);
   const { phone, role, otp } = await parse(req);

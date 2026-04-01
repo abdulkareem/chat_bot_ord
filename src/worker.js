@@ -16,6 +16,12 @@ function validateRequiredEnv(env) {
 }
 
 const routes = [
+  ['POST', '/admin/send-otp', api.adminSendOtp],
+  ['POST', '/admin/verify-otp', api.adminVerifyOtp],
+  ['GET', '/admin/users', api.adminUsers],
+  ['GET', '/admin/chats', api.adminChats],
+  ['GET', '/admin/subscriptions', api.adminSubscriptions],
+  ['GET', '/admin/analytics', api.adminAnalytics],
   ['POST', '/auth/login', api.login],
   ['POST', '/onboarding/verify', api.onboardingVerify],
   ['POST', '/subscription/upload', api.subscriptionUpload],

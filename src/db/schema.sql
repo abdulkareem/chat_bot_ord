@@ -1,4 +1,4 @@
-CREATE TYPE user_role AS ENUM ('customer','shop_owner','driver','admin');
+CREATE TYPE user_role AS ENUM ('SUPER_ADMIN','ADMIN','COLLEGE_COORDINATOR','DEPARTMENT_COORDINATOR','IPO','STUDENT');
 CREATE TYPE verification_status AS ENUM ('pending','approved','rejected');
 CREATE TYPE sub_plan AS ENUM ('monthly','yearly');
 CREATE TYPE sub_status AS ENUM ('active','expired','pending');

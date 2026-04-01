@@ -5,6 +5,7 @@ export function layout({ title, body, script = '' }) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>${title}</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>

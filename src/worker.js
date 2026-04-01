@@ -2,7 +2,7 @@ import { ChatRoomDO } from './do/chat-room.js';
 import { allowRequest } from './core/rate-limit.js';
 import { html, json } from './core/response.js';
 import * as api from './api/handlers.js';
-import { loginScreen, homeScreen, chatScreen } from './ui/templates/screens.js';
+import { loginScreen, homeScreen, chatScreen, onboardingScreen } from './ui/templates/screens.js';
 import { getDb } from './db/index.js';
 import { expireSubscriptions } from './services/subscription.js';
 import { pushDailyInsight } from './cron/analytics.js';
@@ -24,6 +24,14 @@ const routes = [
   ['GET', '/admin/analytics', api.adminAnalytics],
   ['POST', '/auth/login', api.login],
   ['POST', '/onboarding/verify', api.onboardingVerify],
+  ['GET', '/onboarding/status', api.onboardingStatus],
+  ['POST', '/onboarding/request-otp', api.onboardingRequestOtp],
+  ['POST', '/onboarding/verify-otp', api.onboardingVerifyOtp],
+  ['POST', '/onboarding/role', api.onboardingRole],
+  ['POST', '/onboarding/location', api.onboardingLocation],
+  ['POST', '/onboarding/consent', api.onboardingConsent],
+  ['POST', '/onboarding/subscription', api.onboardingSubscription],
+  ['POST', '/admin/onboarding/approve', api.adminApproveOnboarding],
   ['POST', '/subscription/upload', api.subscriptionUpload],
   ['POST', '/subscription/verify', api.subscriptionVerify],
   ['GET', '/subscription/status', api.subscriptionStatus],
@@ -46,7 +54,19 @@ export default {
     if (url.pathname === '/') return html(loginScreen());
     if (url.pathname === '/home') return html(homeScreen());
     if (url.pathname === '/chat') return html(chatScreen());
+    if (url.pathname === '/onboarding') return html(onboardingScreen());
     if (url.pathname === '/static/styles.css') return new Response(STYLE_CSS, { headers: { 'content-type': 'text/css; charset=utf-8' } });
+    if (url.pathname === '/manifest.webmanifest') {
+      return new Response(JSON.stringify({
+        name: 'Vyntaro',
+        short_name: 'Vyntaro',
+        display: 'standalone',
+        start_url: '/onboarding',
+        background_color: '#0b0d18',
+        theme_color: '#7c5cff',
+        icons: []
+      }), { headers: { 'content-type': 'application/manifest+json' } });
+    }
 
     if (url.pathname === '/test') {
       const missing = validateRequiredEnv(env);

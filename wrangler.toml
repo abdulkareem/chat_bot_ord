@@ -15,7 +15,6 @@ tag = "v1"
 new_sqlite_classes = ["ChatRoomDO"]
 
 [vars]
-DATABASE_URL = "postgresql://change-me"
 JWT_SECRET = "change-me"
 OTP_TEST_BYPASS = "000000"
 CHAT_MAX_FILE_BYTES = "2097152"

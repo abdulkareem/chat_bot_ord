@@ -1,5 +1,7 @@
 import { json } from '../core/response.js';
 import { requireAuth, signToken } from '../core/auth.js';
+import { authorizeRoles } from '../core/rbac.js';
+import { normalizeRole } from '../core/roles.js';
 import { getDb } from '../db/index.js';
 import { calculatePlan, startFreeTrial } from '../services/subscription.js';
 import { canParticipate } from '../services/access.js';
@@ -11,17 +13,18 @@ async function parse(req) { return req.json(); }
 export async function login(req, env) {
   const sql = getDb(env);
   const { phone, role, otp } = await parse(req);
-  if (!phone || !role || (!otp && role === 'customer')) return json({ error: 'invalid payload' }, 400);
-  if (role === 'customer' && otp !== env.OTP_TEST_BYPASS) return json({ error: 'otp invalid' }, 401);
+  const normalizedRole = normalizeRole(role);
+  if (!phone || !normalizedRole || (!otp && normalizedRole === 'STUDENT')) return json({ error: 'invalid payload' }, 400);
+  if (normalizedRole === 'STUDENT' && otp !== env.OTP_TEST_BYPASS) return json({ error: 'otp invalid' }, 401);
 
   let [user] = await sql`SELECT * FROM users WHERE phone = ${phone}`;
   if (!user) {
     [user] = await sql`
       INSERT INTO users (phone, role, is_verified, verification_status)
-      VALUES (${phone}, ${role}, ${role === 'customer'}, ${role === 'customer' ? VERIFICATION_STATUS.APPROVED : VERIFICATION_STATUS.PENDING})
+      VALUES (${phone}, ${normalizedRole}, ${normalizedRole === 'STUDENT'}, ${normalizedRole === 'STUDENT' ? VERIFICATION_STATUS.APPROVED : VERIFICATION_STATUS.PENDING})
       RETURNING *
     `;
-    await startFreeTrial(sql, user.id, role);
+    await startFreeTrial(sql, user.id, normalizedRole);
   }
   const token = await signToken({ sub: user.id, role: user.role }, env.JWT_SECRET);
   return json({ token, user });
@@ -49,8 +52,10 @@ export async function subscriptionUpload(req, env) {
   const sql = getDb(env);
   const auth = await requireAuth(req, env);
   if (!auth) return json({ error: 'unauthorized' }, 401);
+  const authRole = normalizeRole(auth.role);
+  if (!authRole) return json({ error: 'invalid role' }, 403);
   const { plan_type, payment_reference, payment_proof_url } = await parse(req);
-  const { amount, gst, totalAmount } = calculatePlan(auth.role, plan_type);
+  const { amount, gst, totalAmount } = calculatePlan(authRole, plan_type);
 
   const start = new Date();
   const end = new Date(start);
@@ -58,7 +63,7 @@ export async function subscriptionUpload(req, env) {
 
   const [row] = await sql`
     INSERT INTO subscriptions (user_id, role, plan_type, amount, gst, total_amount, start_date, end_date, status, payment_proof_url, payment_reference, verified)
-    VALUES (${auth.sub}, ${auth.role}, ${plan_type}, ${amount}, ${gst}, ${totalAmount}, ${start.toISOString()}, ${end.toISOString()}, ${SUB_STATUS.PENDING}, ${payment_proof_url}, ${payment_reference}, false)
+    VALUES (${auth.sub}, ${authRole}, ${plan_type}, ${amount}, ${gst}, ${totalAmount}, ${start.toISOString()}, ${end.toISOString()}, ${SUB_STATUS.PENDING}, ${payment_proof_url}, ${payment_reference}, false)
     RETURNING *
   `;
   return json({ subscription: row });
@@ -66,6 +71,10 @@ export async function subscriptionUpload(req, env) {
 
 export async function subscriptionVerify(req, env) {
   const sql = getDb(env);
+  const adminGuard = authorizeRoles('ADMIN', 'SUPER_ADMIN');
+  const guardResult = await adminGuard(req, env);
+  if (guardResult.error) return guardResult.error;
+
   const { subscription_id, approved } = await parse(req);
   await sql`
     UPDATE subscriptions
@@ -94,7 +103,7 @@ export async function nearbyDrivers(req, env) {
   const rows = await sql`
     SELECT id, name, role, latitude, longitude
     FROM users
-    WHERE role = 'driver' AND is_verified = true AND verification_status = 'approved' AND discoverable = true
+    WHERE role = 'IPO' AND is_verified = true AND verification_status = 'approved' AND discoverable = true
     ORDER BY ((latitude - ${lat})^2 + (longitude - ${lng})^2) ASC
     LIMIT 25
   `;
@@ -108,7 +117,7 @@ export async function nearbyShops(req, env) {
   const rows = await sql`
     SELECT id, name, role, latitude, longitude
     FROM users
-    WHERE role = 'shop_owner' AND is_verified = true AND verification_status = 'approved' AND discoverable = true
+    WHERE role = 'COLLEGE_COORDINATOR' AND is_verified = true AND verification_status = 'approved' AND discoverable = true
     ORDER BY ((latitude - ${lat})^2 + (longitude - ${lng})^2) ASC
     LIMIT 25
   `;

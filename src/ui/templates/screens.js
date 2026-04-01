@@ -3,7 +3,7 @@ import { layout } from './layout.js';
 export const loginScreen = () => layout({
   title: 'PulseLane • Login',
   body: `<section class="card"><h1>PulseLane</h1><p>Hyperlocal chat mesh</p>
-  <form id="loginForm"><input name="phone" placeholder="Phone"/><select name="role"><option value="customer">Customer</option><option value="shop_owner">Shop Owner</option><option value="driver">Driver</option></select><input name="otp" placeholder="OTP (customer only)"/><button>Enter</button></form><pre id="out"></pre></section>`,
+  <form id="loginForm"><input name="phone" placeholder="Phone"/><select name="role"><option value="STUDENT">Student</option><option value="IPO">IPO</option><option value="COLLEGE_COORDINATOR">College Coordinator</option><option value="DEPARTMENT_COORDINATOR">Department Coordinator</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select><input name="otp" placeholder="OTP (student only)"/><button>Enter</button></form><pre id="out"></pre></section>`,
   script: `
   document.getElementById('loginForm').onsubmit = async (e)=>{
     e.preventDefault();

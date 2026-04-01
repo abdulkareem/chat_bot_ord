@@ -16,8 +16,5 @@ new_sqlite_classes = ["ChatRoomDO"]
 [vars]
 JWT_SECRET = "change-me"
 OTP_TEST_BYPASS = "000000"
-
-[[r2_buckets]]
-binding = "UPLOADS"
-bucket_name = "hyperlocal-uploads"
-
+CHAT_MAX_FILE_BYTES = "2097152"
+CHAT_FILE_TTL_MS = "600000"

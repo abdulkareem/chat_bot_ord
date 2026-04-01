@@ -2,7 +2,7 @@ import { ChatRoomDO } from './do/chat-room.js';
 import { allowRequest } from './core/rate-limit.js';
 import { html, json } from './core/response.js';
 import * as api from './api/handlers.js';
-import { loginScreen, homeScreen } from './ui/templates/screens.js';
+import { loginScreen, homeScreen, chatScreen } from './ui/templates/screens.js';
 import { getDb } from './db/index.js';
 import { expireSubscriptions } from './services/subscription.js';
 import { pushDailyInsight } from './cron/analytics.js';
@@ -32,6 +32,7 @@ export default {
 
     if (url.pathname === '/') return html(loginScreen());
     if (url.pathname === '/home') return html(homeScreen());
+    if (url.pathname === '/chat') return html(chatScreen());
     if (url.pathname === '/static/styles.css') return new Response(STYLE_CSS, { headers: { 'content-type': 'text/css; charset=utf-8' } });
 
     if (url.pathname.startsWith('/realtime/')) {

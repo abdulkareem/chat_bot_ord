@@ -140,9 +140,18 @@ export async function chatMessage(req, env) {
   if (!auth) return json({ error: 'unauthorized' }, 401);
   const { chat_id, message_type, content } = await parse(req);
 
+  const normalizedContent = message_type === 'file'
+    ? {
+      fileId: content?.fileId,
+      fileName: typeof content?.fileName === 'string' ? content.fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) : 'file',
+      fileType: content?.fileType,
+      size: content?.size || null
+    }
+    : content;
+
   const [msg] = await sql`
     INSERT INTO messages (chat_id, sender_id, message_type, content)
-    VALUES (${chat_id}, ${auth.sub}, ${message_type}, ${JSON.stringify(content)})
+    VALUES (${chat_id}, ${auth.sub}, ${message_type}, ${JSON.stringify(normalizedContent)})
     RETURNING *
   `;
 

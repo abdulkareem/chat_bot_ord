@@ -108,6 +108,16 @@ CREATE TABLE analytics_events (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE admin_otps (
+  id BIGSERIAL PRIMARY KEY,
+  email TEXT NOT NULL,
+  otp TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX idx_users_discovery ON users(role, is_verified, verification_status, discoverable);
 CREATE INDEX idx_messages_chat_created ON messages(chat_id, created_at DESC);
 CREATE INDEX idx_subscriptions_user_end ON subscriptions(user_id, end_date DESC);
+CREATE INDEX idx_admin_otps_email_created ON admin_otps(email, created_at DESC);

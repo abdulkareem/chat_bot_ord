@@ -1,0 +1,23 @@
+name = "hyperlocal-chat-platform"
+main = "src/worker.js"
+compatibility_date = "2026-04-01"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[durable_objects.bindings]]
+name = "CHAT_ROOM_DO"
+class_name = "ChatRoomDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoomDO"]
+
+[vars]
+JWT_SECRET = "change-me"
+OTP_TEST_BYPASS = "000000"
+
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "hyperlocal-uploads"
+

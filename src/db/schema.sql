@@ -8,10 +8,14 @@ CREATE TABLE users (
   id BIGSERIAL PRIMARY KEY,
   name TEXT,
   phone TEXT UNIQUE NOT NULL,
+  device_id TEXT,
   role user_role NOT NULL,
   latitude DOUBLE PRECISION,
   longitude DOUBLE PRECISION,
+  location_lat DOUBLE PRECISION,
+  location_lng DOUBLE PRECISION,
   is_verified BOOLEAN DEFAULT FALSE,
+  is_approved BOOLEAN DEFAULT FALSE,
   verification_status verification_status DEFAULT 'pending',
   documents JSONB DEFAULT '{}'::jsonb,
   discoverable BOOLEAN DEFAULT TRUE,
@@ -56,10 +60,28 @@ CREATE TABLE subscriptions (
   start_date TIMESTAMPTZ NOT NULL,
   end_date TIMESTAMPTZ NOT NULL,
   status sub_status DEFAULT 'pending',
+  trial_start TIMESTAMPTZ,
+  trial_end TIMESTAMPTZ,
   payment_proof_url TEXT,
   payment_reference TEXT,
   verified BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE otp_codes (
+  id BIGSERIAL PRIMARY KEY,
+  phone TEXT NOT NULL,
+  otp TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  verified BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE consents (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+  accepted_terms BOOLEAN NOT NULL DEFAULT FALSE,
+  timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE chats (
@@ -121,3 +143,5 @@ CREATE INDEX idx_users_discovery ON users(role, is_verified, verification_status
 CREATE INDEX idx_messages_chat_created ON messages(chat_id, created_at DESC);
 CREATE INDEX idx_subscriptions_user_end ON subscriptions(user_id, end_date DESC);
 CREATE INDEX idx_admin_otps_email_created ON admin_otps(email, created_at DESC);
+CREATE INDEX idx_users_phone_device ON users(phone, device_id);
+CREATE INDEX idx_otp_codes_phone_created ON otp_codes(phone, created_at DESC);

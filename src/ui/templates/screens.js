@@ -57,14 +57,12 @@ export const chatScreen = () => layout({
 
 export const onboardingScreen = () => layout({
   title: 'Vyntaro • Onboarding',
-  body: `<section class="card"><h1>Welcome to Vyntaro</h1><p id="statusText">Start by entering your WhatsApp number and device ID to continue.</p>
+  body: `<section class="card"><h1>Welcome to Vyntaro</h1><p id="statusText">Enter your WhatsApp number to continue.</p>
     <div class="grid">
       <input id="phone" placeholder="WhatsApp number (with country code)" />
-      <input id="deviceId" placeholder="Device ID (auto-generated if left empty)" />
       <button id="checkUser">Continue</button>
-      <button id="verifyBtn">Send WhatsApp OTP</button>
+      <button id="verifyBtn">Verify</button>
       <input id="otp" placeholder="Enter 6-digit OTP" style="display:none" />
-      <button id="submitOtp" style="display:none">Verify OTP</button>
     </div>
 
     <div id="roleCard" class="grid" style="display:none;margin-top:14px">
@@ -108,6 +106,15 @@ export const onboardingScreen = () => layout({
     const setStatus = (text) => document.getElementById('statusText').textContent = text;
     async function post(path, body) { const res = await fetch(path, { method: 'POST', headers: headers(), body: JSON.stringify(body) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'request failed'); return data; }
     const show = (id, yes) => document.getElementById(id).style.display = yes ? 'block' : 'none';
+    const getDeviceId = () => {
+      let id = localStorage.getItem('vyntaro_device_id');
+      if (!id) {
+        id = 'web-' + crypto.randomUUID();
+        localStorage.setItem('vyntaro_device_id', id);
+      }
+      return id;
+    };
+    let otpStepActive = false;
     const getLocation = () => new Promise((resolve) => {
       if (!navigator.geolocation) return resolve(null);
       navigator.geolocation.getCurrentPosition((pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }), () => resolve(null), { timeout: 8000 });
@@ -119,7 +126,7 @@ export const onboardingScreen = () => layout({
         setStatus('Please enter your WhatsApp number first.');
         return;
       }
-      const deviceId = document.getElementById('deviceId').value.trim() || ('web-' + Math.random().toString(36).slice(2));
+      const deviceId = getDeviceId();
       const data = await post('/auth/whatsapp/initiate', { whatsappNumber, deviceId });
       print(data);
       if (data.mode === 'device_login' && data.token) {
@@ -128,34 +135,38 @@ export const onboardingScreen = () => layout({
         location.href = '/home';
         return;
       }
-      setStatus('Device is not registered yet. Tap "Send WhatsApp OTP" to verify.');
+      setStatus('Tap "Verify" to open WhatsApp and send the verification message.');
     };
 
     document.getElementById('verifyBtn').onclick = async () => {
+      const whatsappNumber = document.getElementById('phone').value.trim();
+      if (!whatsappNumber) {
+        setStatus('Please enter your WhatsApp number first.');
+        return;
+      }
+      const verifyBtn = document.getElementById('verifyBtn');
+      if (otpStepActive) {
+        const otp = document.getElementById('otp').value.trim();
+        if (!otp) {
+          setStatus('Please enter the OTP you received.');
+          return;
+        }
+        const location = await getLocation();
+        const data = await post('/auth/whatsapp/verify', { whatsappNumber, deviceId: getDeviceId(), otp, location });
+        token = data.token;
+        userId = data.user?.id || null;
+        print(data);
+        setStatus('OTP verified. Select your app usage mode.');
+        show('roleCard', true);
+        return;
+      }
       const text = 'VYNTARO verify my account';
       const to = '9744917623';
       window.location.href = 'https://wa.me/' + to + '?text=' + encodeURIComponent(text);
-      setStatus('After sending the WhatsApp message, enter the OTP below (valid for 5 minutes).');
+      setStatus('After sending the WhatsApp message, enter the OTP below and tap Verify again (valid for 5 minutes).');
       show('otp', true);
-      show('submitOtp', true);
-      document.getElementById('verifyBtn').textContent = 'Waiting for OTP...';
-    };
-
-    document.getElementById('submitOtp').onclick = async () => {
-      const whatsappNumber = document.getElementById('phone').value.trim();
-      const deviceId = document.getElementById('deviceId').value.trim();
-      const otp = document.getElementById('otp').value.trim();
-      if (!otp) {
-        setStatus('Please enter the OTP you received.');
-        return;
-      }
-      const location = await getLocation();
-      const data = await post('/auth/whatsapp/verify', { whatsappNumber, deviceId, otp, location });
-      token = data.token;
-      userId = data.user?.id || null;
-      print(data);
-      setStatus('OTP verified. Select your app usage mode.');
-      show('roleCard', true);
+      otpStepActive = true;
+      verifyBtn.textContent = 'Enter OTP & Verify';
     };
 
     document.getElementById('continueRole').onclick = async () => {

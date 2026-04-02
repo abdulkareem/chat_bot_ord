@@ -101,11 +101,15 @@ async function sendResendEmail(env, to, otp) {
 }
 
 async function sendWhatsAppOtp(env, phone, otp) {
-  if (!env.WHATSAPP_API_URL || !env.WHATSAPP_API_TOKEN) return { simulated: true };
-  const res = await fetch(env.WHATSAPP_API_URL, {
+  const apiUrl = env.WHATSAPP_API_URL;
+  const apiKey = env.APP_API_KEY || env.WHATSAPP_API_TOKEN;
+  if (!apiUrl || !apiKey) return { simulated: true };
+  const res = await fetch(apiUrl, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.WHATSAPP_API_TOKEN}`,
+      Authorization: `Bearer ${apiKey}`,
+      APP_API_KEY: apiKey,
+      'x-api-key': apiKey,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -119,6 +123,13 @@ async function sendWhatsAppOtp(env, phone, otp) {
     throw new Error(`WhatsApp send failed: ${body}`);
   }
   return { simulated: false };
+}
+
+function resolveDeviceId(req, providedDeviceId) {
+  if (providedDeviceId) return String(providedDeviceId).trim();
+  const ua = req.headers.get('user-agent') || 'unknown';
+  const ip = req.headers.get('cf-connecting-ip') || 'unknown';
+  return `auto-${ip}-${ua}`.slice(0, 180);
 }
 
 async function requireSuperAdmin(req, env) {
@@ -238,7 +249,8 @@ export async function whatsappInitiate(req, env) {
   const sql = getDb(env);
   const scope = enforceApp(req, 'pwa');
   if (scope.error) return scope.error;
-  const { whatsappNumber, deviceId } = await parse(req);
+  const { whatsappNumber, deviceId: requestedDeviceId } = await parse(req);
+  const deviceId = resolveDeviceId(req, requestedDeviceId);
   const number = normalizePhone(whatsappNumber);
   if (!number || number.length < 8) return json({ error: 'invalid whatsapp number' }, 400);
 
@@ -255,8 +267,8 @@ export async function whatsappInitiate(req, env) {
     exists: !!user,
     requiresWhatsAppVerification: true,
     next: 'send_whatsapp_verify_message',
-    instruction: 'Send "VYNTARO verofy my account" from your WhatsApp to continue.',
-    whatsappIntentText: 'VYNTARO verofy my account',
+    instruction: 'Send "VYNTARO verify my account" from your WhatsApp to continue.',
+    whatsappIntentText: 'VYNTARO verify my account',
     verifyTo: '9744917623'
   });
 }
@@ -280,7 +292,8 @@ export async function whatsappVerify(req, env) {
   const sql = getDb(env);
   const scope = enforceApp(req, 'pwa');
   if (scope.error) return scope.error;
-  const { whatsappNumber, otp, deviceId, location } = await parse(req);
+  const { whatsappNumber, otp, deviceId: requestedDeviceId, location } = await parse(req);
+  const deviceId = resolveDeviceId(req, requestedDeviceId);
   const number = normalizePhone(whatsappNumber);
   const otpHash = await sha256Hex(String(otp || ''));
   const [row] = await sql`SELECT id, expiry FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${number} AND channel = 'whatsapp' AND purpose = 'login' AND otp_hash = ${otpHash} AND is_verified = false ORDER BY created_at DESC LIMIT 1`;

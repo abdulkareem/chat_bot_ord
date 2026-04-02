@@ -25,3 +25,11 @@ test('generated otp is 6 digits', () => {
   const otp = __test.generateSixDigitOtp();
   assert.match(otp, /^\d{6}$/);
 });
+
+
+test('builds resend email payload using aureliv domain', () => {
+  const payload = __test.buildAdminOtpEmailPayload('abdulkareem@psmocollege.ac.in', '654321');
+  assert.equal(payload.from, 'noreply@aureliv.in');
+  assert.deepEqual(payload.to, ['abdulkareem@psmocollege.ac.in']);
+  assert.match(payload.html, /654321/);
+});

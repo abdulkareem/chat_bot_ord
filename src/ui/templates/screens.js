@@ -57,9 +57,9 @@ export const chatScreen = () => layout({
 
 export const onboardingScreen = () => layout({
   title: 'Vyntaro • Onboarding',
-  body: `<section class="card"><h1>Welcome to Vyntaro</h1><p id="statusText">Enter your WhatsApp number to continue.</p>
+  body: `<section class="card"><h1>Welcome to Vyntaro</h1><p id="statusText">Enter your WhatsApp number with country code (without 00 or +) to continue.</p>
     <div class="grid">
-      <input id="phone" placeholder="WhatsApp number" />
+      <input id="phone" placeholder="WhatsApp number (e.g. 919876543210)" />
       <button id="verifyBtn">Verify</button>
       <input id="otp" placeholder="Enter 6-digit OTP" style="display:none" />
     </div>
@@ -115,11 +115,11 @@ export const onboardingScreen = () => layout({
     };
     let otpStepActive = false;
     const normalizeWhatsappInput = (value) => {
-      const digits = String(value || '').replace(/\\D/g, '');
-      if (!digits) return '';
-      if (digits.length === 10) return '+91' + digits;
-      if (digits.startsWith('91') && digits.length === 12) return '+' + digits;
-      return value.trim().startsWith('+') ? value.trim() : ('+' + digits);
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      if (raw.startsWith('+') || raw.startsWith('00')) return null;
+      if (!/^\\d{8,15}$/.test(raw)) return null;
+      return '+' + raw;
     };
     const getLocation = () => new Promise((resolve) => {
       if (!navigator.geolocation) return resolve(null);
@@ -130,10 +130,10 @@ export const onboardingScreen = () => layout({
       const phoneInput = document.getElementById('phone');
       const whatsappNumber = normalizeWhatsappInput(phoneInput.value);
       if (!whatsappNumber) {
-        setStatus('Please enter your WhatsApp number first.');
+        setStatus('Enter WhatsApp number with country code and digits only (without 00 or +).');
         return;
       }
-      phoneInput.value = whatsappNumber;
+      phoneInput.value = whatsappNumber.replace(/^\\+/, '');
       const verifyBtn = document.getElementById('verifyBtn');
       if (otpStepActive) {
         const otp = document.getElementById('otp').value.trim();
@@ -168,11 +168,24 @@ export const onboardingScreen = () => layout({
           window.location.href = 'https://wa.me/' + waDigits + '?text=' + encodeURIComponent(text);
         }
       }, 900);
-      setStatus('After sending the WhatsApp message, enter the OTP below and tap Verify again (valid for 5 minutes).');
+      const otpWindow = window.open('', 'vyntaroOtpWindow', 'width=420,height=280');
+      if (otpWindow) {
+        otpWindow.document.write('<!doctype html><html><head><title>Enter OTP</title><style>body{font-family:Arial,sans-serif;padding:16px}input,button{font-size:16px;padding:8px;margin-top:8px;width:100%}small{display:block;margin-top:8px;color:#555}</style></head><body><h3>Enter 6-digit OTP</h3><p>After WhatsApp confirmation reply is received, enter your OTP below.</p><input id="otpInput" placeholder="6-digit OTP" maxlength="6" /><button id="submitOtp">Use OTP</button><small>You can close this window after submitting.</small><script>document.getElementById("submitOtp").onclick=function(){var otp=(document.getElementById("otpInput").value||"").trim();window.opener.postMessage({type:"VYNTARO_OTP",otp:otp},"*");};</script></body></html>');
+        otpWindow.document.close();
+      }
+      setStatus('After sending the WhatsApp message, enter the OTP in the OTP window and tap Verify again (valid for 5 minutes).');
       show('otp', true);
       otpStepActive = true;
       verifyBtn.textContent = 'Enter OTP & Verify';
     };
+
+    window.addEventListener('message', (event) => {
+      if (!event || !event.data || event.data.type !== 'VYNTARO_OTP') return;
+      const otp = String(event.data.otp || '').replace(/\\D/g, '').slice(0, 6);
+      if (!otp) return;
+      document.getElementById('otp').value = otp;
+      setStatus('OTP captured. Tap Verify to continue.');
+    });
 
     document.getElementById('continueRole').onclick = async () => {
       currentRole = document.getElementById('role').value;

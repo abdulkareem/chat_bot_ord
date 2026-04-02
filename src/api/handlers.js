@@ -2,13 +2,19 @@ import { json } from '../core/response.js';
 import { requireAuth, signToken } from '../core/auth.js';
 import { getDb } from '../db/index.js';
 import { APP_ID, ROLES, SUB_STATUS, VERIFICATION_STATUS } from '../types/constants.js';
+import { startFreeTrial } from '../services/subscription.js';
 
 const SUPER_ADMIN_EMAIL = 'abdulkareem@psmocollege.ac.in';
 const OTP_EXPIRY_MINUTES = 5;
 const OTP_RESEND_COOLDOWN_SECONDS = 45;
 const OTP_WINDOW_MINUTES = 10;
 const OTP_MAX_REQUESTS = 3;
-const WHATSAPP_VERIFY_TEXT = 'vyntaro verify my account.';
+const WHATSAPP_VERIFY_TEXTS = [
+  'vyntaro verify my account',
+  'vyntaro verify my account.',
+  'vyntaro verofy my account',
+  'vyntaro verofy my account.'
+];
 
 const sessionCache = new Map();
 
@@ -247,8 +253,11 @@ export async function whatsappInitiate(req, env) {
   return json({
     ok: true,
     exists: !!user,
+    requiresWhatsAppVerification: true,
     next: 'send_whatsapp_verify_message',
-    instruction: 'Send "VYNTARO verify my account." from your WhatsApp to continue.'
+    instruction: 'Send "VYNTARO verofy my account" from your WhatsApp to continue.',
+    whatsappIntentText: 'VYNTARO verofy my account',
+    verifyTo: '9744917623'
   });
 }
 
@@ -257,7 +266,7 @@ export async function whatsappWebhook(req, env) {
   const payload = await parse(req);
   const from = normalizePhone(payload.from || payload.wa_id || payload.phone);
   const body = String(payload.message || payload.text?.body || '').trim().toLowerCase();
-  if (!from || body !== WHATSAPP_VERIFY_TEXT) return json({ ok: true, ignored: true });
+  if (!from || !WHATSAPP_VERIFY_TEXTS.includes(body)) return json({ ok: true, ignored: true });
 
   const [rate] = await sql`SELECT COUNT(*)::int AS count FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${from} AND channel = 'whatsapp' AND created_at >= NOW() - (${OTP_WINDOW_MINUTES} * INTERVAL '1 minute')`;
   if (rate.count >= OTP_MAX_REQUESTS) return json({ error: 'too many otp requests' }, 429);
@@ -277,7 +286,8 @@ export async function whatsappVerify(req, env) {
   const [row] = await sql`SELECT id, expiry FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${number} AND channel = 'whatsapp' AND purpose = 'login' AND otp_hash = ${otpHash} AND is_verified = false ORDER BY created_at DESC LIMIT 1`;
   if (!row || new Date(row.expiry).getTime() < Date.now()) return json({ error: 'otp invalid/expired' }, 401);
 
-  await sql`UPDATE otp_verifications SET is_verified = true WHERE id = ${row.id}`;
+  await sql`DELETE FROM otp_verifications WHERE id = ${row.id}`;
+  await sql`DELETE FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${number} AND channel = 'whatsapp' AND expiry < NOW()`;
   const user = await upsertUser(sql, {
     whatsappNumber: number,
     deviceId,
@@ -300,16 +310,31 @@ export async function registerUser(req, env) {
   const sql = getDb(env);
   const scope = enforceApp(req, 'pwa');
   if (scope.error) return scope.error;
-  const { name, whatsappNumber, role } = await parse(req);
+  const { name, whatsappNumber, role, consent } = await parse(req);
   const resolvedRole = normalizeRole(role);
   if (!name || !resolvedRole) return json({ error: 'name and valid role are required' }, 400);
+  if (resolvedRole === ROLES.CUSTOMER && !consent?.acceptedTerms) {
+    return json({ error: 'terms and legal consent are required for customer registration' }, 400);
+  }
   const number = normalizePhone(whatsappNumber);
   const [existing] = await sql`SELECT id FROM users WHERE app_id = ${APP_ID} AND phone = ${number}`;
   if (existing) {
     await sql`UPDATE users SET name = ${name}, role = ${resolvedRole} WHERE id = ${existing.id}`;
+    if (resolvedRole === ROLES.CUSTOMER) {
+      await sql`
+        INSERT INTO consents (app_id, user_id, accepted_terms, legal_name_usage, legal_number_usage, legal_location_usage, legal_chat_history_usage, timestamp)
+        VALUES (${APP_ID}, ${existing.id}, true, true, true, true, true, NOW())
+      `;
+    }
     return json({ ok: true, userId: existing.id, role: resolvedRole });
   }
   const [created] = await sql`INSERT INTO users (app_id, name, phone, role, is_verified, verification_status, is_approved) VALUES (${APP_ID}, ${name}, ${number}, ${resolvedRole}, true, ${VERIFICATION_STATUS.PENDING}, ${resolvedRole === ROLES.CUSTOMER}) RETURNING id, role`;
+  if (resolvedRole === ROLES.CUSTOMER) {
+    await sql`
+      INSERT INTO consents (app_id, user_id, accepted_terms, legal_name_usage, legal_number_usage, legal_location_usage, legal_chat_history_usage, timestamp)
+      VALUES (${APP_ID}, ${created.id}, true, true, true, true, true, NOW())
+    `;
+  }
   return json({ ok: true, userId: created.id, role: created.role });
 }
 
@@ -317,26 +342,30 @@ export async function registerDriver(req, env) {
   const sql = getDb(env);
   const scope = enforceApp(req, 'pwa');
   if (scope.error) return scope.error;
-  const { userId, driverName, vehicleNumber, rcOwner, phone, location } = await parse(req);
+  const { userId, driverName, vehicleNumber, rcOwner, phone, location, planType = 'monthly' } = await parse(req);
   if (!vehicleNumber || !rcOwner) return json({ error: 'vehicleNumber and rcOwner are required' }, 400);
   const [user] = await sql`SELECT id FROM users WHERE app_id = ${APP_ID} AND id = ${userId}`;
   if (!user) return json({ error: 'user not found' }, 404);
 
   await sql`UPDATE users SET name = COALESCE(${driverName}, name), role = ${ROLES.AUTO_DRIVER}, phone = COALESCE(${normalizePhone(phone)}, phone), location_lat = COALESCE(${location?.lat ?? null}, location_lat), location_lng = COALESCE(${location?.lng ?? null}, location_lng), is_approved = false, verification_status = ${VERIFICATION_STATUS.PENDING} WHERE id = ${userId}`;
   await sql`INSERT INTO drivers (app_id, user_id, vehicle_number, rc_owner, approval_status) VALUES (${APP_ID}, ${userId}, ${vehicleNumber}, ${rcOwner}, 'pending') ON CONFLICT (user_id) DO UPDATE SET vehicle_number = EXCLUDED.vehicle_number, rc_owner = EXCLUDED.rc_owner, approval_status = 'pending'`;
-  return json({ ok: true, approvalStatus: 'pending' });
+  const [existingSub] = await sql`SELECT id FROM subscriptions WHERE app_id = ${APP_ID} AND user_id = ${userId} AND status = ${SUB_STATUS.ACTIVE} LIMIT 1`;
+  if (!existingSub) await startFreeTrial(sql, userId, ROLES.AUTO_DRIVER);
+  return json({ ok: true, approvalStatus: 'pending', selectedPlan: planType === 'yearly' ? 'yearly' : 'monthly', message: 'Free 1 month trial started. Please wait for super admin verification.' });
 }
 
 export async function registerShop(req, env) {
   const sql = getDb(env);
   const scope = enforceApp(req, 'pwa');
   if (scope.error) return scope.error;
-  const { userId, shopName, ownerName, shopAddress, category, phone, location } = await parse(req);
+  const { userId, shopName, ownerName, shopAddress, category, phone, location, planType = 'monthly' } = await parse(req);
   if (!shopName || !shopAddress || !category) return json({ error: 'shopName, category and shopAddress are required' }, 400);
 
   await sql`UPDATE users SET name = COALESCE(${ownerName}, name), role = ${ROLES.SHOP_OWNER}, phone = COALESCE(${normalizePhone(phone)}, phone), location_lat = COALESCE(${location?.lat ?? null}, location_lat), location_lng = COALESCE(${location?.lng ?? null}, location_lng), is_approved = false, verification_status = ${VERIFICATION_STATUS.PENDING} WHERE id = ${userId} AND app_id = ${APP_ID}`;
   await sql`INSERT INTO shops (app_id, user_id, shop_name, category, address, lat, lng, approval_status) VALUES (${APP_ID}, ${userId}, ${shopName}, ${category}, ${shopAddress}, ${location?.lat ?? null}, ${location?.lng ?? null}, 'pending') ON CONFLICT (user_id) DO UPDATE SET shop_name = EXCLUDED.shop_name, category = EXCLUDED.category, address = EXCLUDED.address, lat = EXCLUDED.lat, lng = EXCLUDED.lng, approval_status = 'pending'`;
-  return json({ ok: true, approvalStatus: 'pending' });
+  const [existingSub] = await sql`SELECT id FROM subscriptions WHERE app_id = ${APP_ID} AND user_id = ${userId} AND status = ${SUB_STATUS.ACTIVE} LIMIT 1`;
+  if (!existingSub) await startFreeTrial(sql, userId, ROLES.SHOP_OWNER);
+  return json({ ok: true, approvalStatus: 'pending', selectedPlan: planType === 'yearly' ? 'yearly' : 'monthly', message: 'Free 1 month trial started. Please wait for super admin verification.' });
 }
 
 export async function adminUsers(req, env) {

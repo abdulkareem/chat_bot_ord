@@ -90,6 +90,10 @@ CREATE TABLE consents (
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
   accepted_terms BOOLEAN NOT NULL DEFAULT FALSE,
+  legal_name_usage BOOLEAN NOT NULL DEFAULT FALSE,
+  legal_number_usage BOOLEAN NOT NULL DEFAULT FALSE,
+  legal_location_usage BOOLEAN NOT NULL DEFAULT FALSE,
+  legal_chat_history_usage BOOLEAN NOT NULL DEFAULT FALSE,
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -205,3 +209,5 @@ ALTER TABLE shops ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'pending
 
 CREATE INDEX IF NOT EXISTS idx_devices_user_last_login ON devices(app_id, user_id, last_login DESC);
 CREATE INDEX IF NOT EXISTS idx_otp_verifications_contact ON otp_verifications(app_id, contact, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_device ON onboarding_sessions(app_id, device_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_otp_verifications_expiry ON otp_verifications(app_id, expiry);

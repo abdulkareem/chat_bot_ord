@@ -1,21 +1,25 @@
 {
-  "name": "hyperlocal-chat-platform",
-  "version": "1.0.0",
+  "name": "hyperlocal-chat-marketplace-monorepo",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "CI=1 wrangler deploy",
-    "test": "node --test",
-    "lint": "echo 'No linter configured'",
-    "db:init": "node scripts/init-db.js",
-    "db:audit": "node scripts/audit-sync.js",
-    "db:sync": "node scripts/audit-sync.js --apply"
+    "dev:backend": "node apps/backend/src/server.js",
+    "dev:worker": "wrangler dev -c apps/worker/wrangler.toml",
+    "test": "node --test tests/*.test.js",
+    "prisma:generate": "prisma generate --schema apps/backend/prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate deploy --schema apps/backend/prisma/schema.prisma"
   },
   "dependencies": {
-    "postgres": "^3.4.5"
+    "@prisma/client": "^5.23.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
+    "prisma": "^5.23.0",
     "wrangler": "^4.9.0"
   }
 }

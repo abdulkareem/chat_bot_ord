@@ -1,0 +1,9 @@
+{
+  "name": "Hyperlocal Chat Marketplace",
+  "short_name": "Hyperlocal",
+  "display": "standalone",
+  "start_url": "/",
+  "background_color": "#0f172a",
+  "theme_color": "#6366f1",
+  "icons": []
+}

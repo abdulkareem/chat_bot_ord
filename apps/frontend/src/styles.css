@@ -1,0 +1,7 @@
+body { font-family: system-ui; margin: 0; background: #0f172a; color: #e2e8f0; }
+.app { max-width: 480px; margin: auto; padding: 16px; }
+.card { background: #111827; padding: 12px; margin-bottom: 12px; border-radius: 12px; }
+input, button { width: 100%; margin: 6px 0; padding: 10px; border-radius: 10px; border: 1px solid #334155; }
+button { background: #6366f1; color: white; border: none; }
+.hidden { display: none; }
+#feed { max-height: 220px; overflow: auto; background: #020617; border-radius: 10px; padding: 8px; }

@@ -11,9 +11,11 @@ const OTP_WINDOW_MINUTES = 10;
 const OTP_MAX_REQUESTS = 3;
 const WHATSAPP_VERIFY_TEXTS = [
   'vyntaro verify my account',
+  'vytnaro verify my account',
+  'vyntaro',
   'vyntaro verify my account.',
-  'vyntaro verofy my account',
-  'vyntaro verofy my account.'
+  'vytnaro verify my account.',
+  'vyntaro.'
 ];
 
 const sessionCache = new Map();
@@ -24,7 +26,9 @@ function normalizeEmail(email) {
 
 function normalizePhone(phone) {
   const digits = String(phone || '').replace(/[^\d]/g, '');
-  return digits.startsWith('91') && digits.length === 12 ? `+${digits}` : `+${digits.replace(/^\+/, '')}`;
+  if (!digits) return '';
+  if (digits.length === 10) return `+91${digits}`;
+  return digits.startsWith('91') && digits.length === 12 ? `+${digits}` : `+${digits}`;
 }
 
 

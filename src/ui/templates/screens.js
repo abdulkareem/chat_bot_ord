@@ -59,8 +59,7 @@ export const onboardingScreen = () => layout({
   title: 'Vyntaro • Onboarding',
   body: `<section class="card"><h1>Welcome to Vyntaro</h1><p id="statusText">Enter your WhatsApp number to continue.</p>
     <div class="grid">
-      <input id="phone" placeholder="WhatsApp number (with country code)" />
-      <button id="checkUser">Continue</button>
+      <input id="phone" placeholder="WhatsApp number" />
       <button id="verifyBtn">Verify</button>
       <input id="otp" placeholder="Enter 6-digit OTP" style="display:none" />
     </div>
@@ -115,35 +114,26 @@ export const onboardingScreen = () => layout({
       return id;
     };
     let otpStepActive = false;
+    const normalizeWhatsappInput = (value) => {
+      const digits = String(value || '').replace(/\\D/g, '');
+      if (!digits) return '';
+      if (digits.length === 10) return '+91' + digits;
+      if (digits.startsWith('91') && digits.length === 12) return '+' + digits;
+      return value.trim().startsWith('+') ? value.trim() : ('+' + digits);
+    };
     const getLocation = () => new Promise((resolve) => {
       if (!navigator.geolocation) return resolve(null);
       navigator.geolocation.getCurrentPosition((pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }), () => resolve(null), { timeout: 8000 });
     });
 
-    document.getElementById('checkUser').onclick = async () => {
-      const whatsappNumber = document.getElementById('phone').value.trim();
-      if (!whatsappNumber) {
-        setStatus('Please enter your WhatsApp number first.');
-        return;
-      }
-      const deviceId = getDeviceId();
-      const data = await post('/auth/whatsapp/initiate', { whatsappNumber, deviceId });
-      print(data);
-      if (data.mode === 'device_login' && data.token) {
-        token = data.token;
-        setStatus('Device already registered. Logged in.');
-        location.href = '/home';
-        return;
-      }
-      setStatus('Tap "Verify" to open WhatsApp and send the verification message.');
-    };
-
     document.getElementById('verifyBtn').onclick = async () => {
-      const whatsappNumber = document.getElementById('phone').value.trim();
+      const phoneInput = document.getElementById('phone');
+      const whatsappNumber = normalizeWhatsappInput(phoneInput.value);
       if (!whatsappNumber) {
         setStatus('Please enter your WhatsApp number first.');
         return;
       }
+      phoneInput.value = whatsappNumber;
       const verifyBtn = document.getElementById('verifyBtn');
       if (otpStepActive) {
         const otp = document.getElementById('otp').value.trim();
@@ -158,6 +148,15 @@ export const onboardingScreen = () => layout({
         print(data);
         setStatus('OTP verified. Select your app usage mode.');
         show('roleCard', true);
+        return;
+      }
+      const deviceId = getDeviceId();
+      const data = await post('/auth/whatsapp/initiate', { whatsappNumber, deviceId });
+      print(data);
+      if (data.mode === 'device_login' && data.token) {
+        token = data.token;
+        setStatus('Device already registered. Logged in.');
+        location.href = '/home';
         return;
       }
       const text = 'VYNTARO verify my account';

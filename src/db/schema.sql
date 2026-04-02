@@ -1,4 +1,4 @@
-CREATE TYPE user_role AS ENUM ('SUPER_ADMIN','ADMIN','COLLEGE_COORDINATOR','DEPARTMENT_COORDINATOR','IPO','STUDENT');
+CREATE TYPE user_role AS ENUM ('SUPER_ADMIN','CUSTOMER','AUTO_DRIVER','SHOP_OWNER');
 CREATE TYPE verification_status AS ENUM ('pending','approved','rejected');
 CREATE TYPE sub_plan AS ENUM ('monthly','yearly');
 CREATE TYPE sub_status AS ENUM ('active','expired','pending');
@@ -6,10 +6,13 @@ CREATE TYPE message_type AS ENUM ('text','image','location','offer_card','bill',
 
 CREATE TABLE users (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   name TEXT,
   phone TEXT UNIQUE NOT NULL,
   device_id TEXT,
   role user_role NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  subscription_expired BOOLEAN NOT NULL DEFAULT FALSE,
   latitude DOUBLE PRECISION,
   longitude DOUBLE PRECISION,
   location_lat DOUBLE PRECISION,
@@ -24,6 +27,7 @@ CREATE TABLE users (
 
 CREATE TABLE shops (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
   shop_name TEXT,
   gst_number TEXT,
@@ -33,6 +37,7 @@ CREATE TABLE shops (
 
 CREATE TABLE drivers (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
   vehicle_number TEXT,
   license_number TEXT,
@@ -41,6 +46,7 @@ CREATE TABLE drivers (
 
 CREATE TABLE verification_documents (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
   documents JSONB NOT NULL,
   status verification_status DEFAULT 'pending',
@@ -51,6 +57,7 @@ CREATE TABLE verification_documents (
 
 CREATE TABLE subscriptions (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
   role user_role NOT NULL,
   plan_type sub_plan NOT NULL,
@@ -70,6 +77,7 @@ CREATE TABLE subscriptions (
 
 CREATE TABLE otp_codes (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   phone TEXT NOT NULL,
   otp TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
@@ -79,6 +87,7 @@ CREATE TABLE otp_codes (
 
 CREATE TABLE consents (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
   accepted_terms BOOLEAN NOT NULL DEFAULT FALSE,
   timestamp TIMESTAMPTZ DEFAULT NOW()
@@ -86,6 +95,7 @@ CREATE TABLE consents (
 
 CREATE TABLE chats (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_a BIGINT REFERENCES users(id),
   user_b BIGINT REFERENCES users(id),
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -95,6 +105,7 @@ CREATE TABLE chats (
 
 CREATE TABLE messages (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   chat_id BIGINT REFERENCES chats(id) ON DELETE CASCADE,
   sender_id BIGINT REFERENCES users(id),
   message_type message_type NOT NULL,
@@ -104,6 +115,7 @@ CREATE TABLE messages (
 
 CREATE TABLE offers (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   shop_id BIGINT REFERENCES users(id),
   title TEXT,
   description TEXT,
@@ -114,6 +126,7 @@ CREATE TABLE offers (
 
 CREATE TABLE orders (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   chat_id BIGINT REFERENCES chats(id),
   user_id BIGINT REFERENCES users(id),
   order_payload JSONB,
@@ -124,6 +137,7 @@ CREATE TABLE orders (
 
 CREATE TABLE analytics_events (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id),
   event_type TEXT NOT NULL,
   payload JSONB,
@@ -132,6 +146,7 @@ CREATE TABLE analytics_events (
 
 CREATE TABLE admin_otps (
   id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
   email TEXT NOT NULL,
   otp TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
@@ -139,9 +154,9 @@ CREATE TABLE admin_otps (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_users_discovery ON users(role, is_verified, verification_status, discoverable);
-CREATE INDEX idx_messages_chat_created ON messages(chat_id, created_at DESC);
-CREATE INDEX idx_subscriptions_user_end ON subscriptions(user_id, end_date DESC);
-CREATE INDEX idx_admin_otps_email_created ON admin_otps(email, created_at DESC);
-CREATE INDEX idx_users_phone_device ON users(phone, device_id);
-CREATE INDEX idx_otp_codes_phone_created ON otp_codes(phone, created_at DESC);
+CREATE INDEX idx_users_discovery ON users(app_id, role, active, is_verified, verification_status, discoverable);
+CREATE INDEX idx_messages_chat_created ON messages(app_id, chat_id, created_at DESC);
+CREATE INDEX idx_subscriptions_user_end ON subscriptions(app_id, user_id, end_date DESC);
+CREATE INDEX idx_admin_otps_email_created ON admin_otps(app_id, email, created_at DESC);
+CREATE INDEX idx_users_phone_device ON users(app_id, phone, device_id);
+CREATE INDEX idx_otp_codes_phone_created ON otp_codes(app_id, phone, created_at DESC);

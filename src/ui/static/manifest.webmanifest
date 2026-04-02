@@ -1,0 +1,11 @@
+{
+  "name": "Vyntaro",
+  "short_name": "Vyntaro",
+  "display": "standalone",
+  "start_url": "/onboarding",
+  "scope": "/",
+  "background_color": "#0b0d18",
+  "theme_color": "#7c5cff",
+  "description": "Vyntaro customer/driver/shop-owner app",
+  "icons": []
+}

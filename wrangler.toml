@@ -19,3 +19,17 @@ JWT_SECRET = "change-me"
 OTP_TEST_BYPASS = "000000"
 CHAT_MAX_FILE_BYTES = "2097152"
 CHAT_FILE_TTL_MS = "600000"
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1

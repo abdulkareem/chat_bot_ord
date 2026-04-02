@@ -1,31 +1,28 @@
 export const ROLE_MAP = Object.freeze({
   SUPER_ADMIN: 'SUPER_ADMIN',
-  ADMIN: 'ADMIN',
-  COLLEGE: 'COLLEGE_COORDINATOR',
-  COORDINATOR: 'COLLEGE_COORDINATOR',
-  COLLEGE_COORDINATOR: 'COLLEGE_COORDINATOR',
-  DEPARTMENT: 'DEPARTMENT_COORDINATOR',
-  DEPARTMENT_COORDINATOR: 'DEPARTMENT_COORDINATOR',
-  INDUSTRY: 'IPO',
-  IPO: 'IPO',
-  STUDENT: 'STUDENT',
-  EXTERNAL_STUDENT: 'STUDENT'
+  SUPERADMIN: 'SUPER_ADMIN',
+  CUSTOMER: 'CUSTOMER',
+  AUTO_DRIVER: 'AUTO_DRIVER',
+  DRIVER: 'AUTO_DRIVER',
+  SHOP_OWNER: 'SHOP_OWNER',
+  SHOP: 'SHOP_OWNER'
 });
 
 export const ROLE_ALIASES = Object.freeze({
-  customer: 'STUDENT',
-  shop_owner: 'COLLEGE_COORDINATOR',
-  driver: 'IPO',
-  admin: 'ADMIN'
+  super_admin: 'SUPER_ADMIN',
+  superadmin: 'SUPER_ADMIN',
+  customer: 'CUSTOMER',
+  auto_driver: 'AUTO_DRIVER',
+  driver: 'AUTO_DRIVER',
+  shop_owner: 'SHOP_OWNER',
+  shop: 'SHOP_OWNER'
 });
 
 export const VALID_ROLES = Object.freeze([
   'SUPER_ADMIN',
-  'ADMIN',
-  'COLLEGE_COORDINATOR',
-  'DEPARTMENT_COORDINATOR',
-  'IPO',
-  'STUDENT'
+  'CUSTOMER',
+  'AUTO_DRIVER',
+  'SHOP_OWNER'
 ]);
 
 export function normalizeRole(inputRole) {
@@ -33,4 +30,9 @@ export function normalizeRole(inputRole) {
   const trimmed = inputRole.trim();
   const upper = trimmed.toUpperCase();
   return ROLE_MAP[upper] || ROLE_ALIASES[trimmed.toLowerCase()] || null;
+}
+
+export function isAppUserRole(role) {
+  const normalized = normalizeRole(role);
+  return normalized === 'CUSTOMER' || normalized === 'AUTO_DRIVER' || normalized === 'SHOP_OWNER';
 }

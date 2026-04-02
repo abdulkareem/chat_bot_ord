@@ -1,10 +1,10 @@
+export const APP_ID = 'vyntaro';
+
 export const ROLES = Object.freeze({
   SUPER_ADMIN: 'SUPER_ADMIN',
-  ADMIN: 'ADMIN',
-  COLLEGE_COORDINATOR: 'COLLEGE_COORDINATOR',
-  DEPARTMENT_COORDINATOR: 'DEPARTMENT_COORDINATOR',
-  IPO: 'IPO',
-  STUDENT: 'STUDENT'
+  CUSTOMER: 'CUSTOMER',
+  AUTO_DRIVER: 'AUTO_DRIVER',
+  SHOP_OWNER: 'SHOP_OWNER'
 });
 
 export const VERIFICATION_STATUS = Object.freeze({
@@ -20,27 +20,19 @@ export const SUB_STATUS = Object.freeze({
 });
 
 export const PLAN_CONFIG = Object.freeze({
-  SUPER_ADMIN: {
+  CUSTOMER: {
     monthly: { amount: 0, gstRate: 0 },
     yearly: { amount: 0, gstRate: 0 }
   },
-  ADMIN: {
-    monthly: { amount: 0, gstRate: 0 },
-    yearly: { amount: 0, gstRate: 0 }
-  },
-  COLLEGE_COORDINATOR: {
-    monthly: { amount: 89, gstRate: 0.18 },
-    yearly: { amount: 899, gstRate: 0.18 }
-  },
-  DEPARTMENT_COORDINATOR: {
-    monthly: { amount: 69, gstRate: 0.18 },
-    yearly: { amount: 699, gstRate: 0.18 }
-  },
-  IPO: {
+  AUTO_DRIVER: {
     monthly: { amount: 49, gstRate: 0.18 },
     yearly: { amount: 499, gstRate: 0.18 }
   },
-  STUDENT: {
+  SHOP_OWNER: {
+    monthly: { amount: 89, gstRate: 0.18 },
+    yearly: { amount: 899, gstRate: 0.18 }
+  },
+  SUPER_ADMIN: {
     monthly: { amount: 0, gstRate: 0 },
     yearly: { amount: 0, gstRate: 0 }
   }

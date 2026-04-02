@@ -320,9 +320,9 @@ export async function whatsappInitiate(req, env) {
     exists: !!user,
     requiresWhatsAppVerification: true,
     next: 'send_whatsapp_verify_message',
-    instruction: 'Send "VYNTARO verify my number" from your WhatsApp to continue.',
+    instruction: 'Send "VYNTARO verify my number" from your WhatsApp to +919744917623 to continue.',
     whatsappIntentText: 'VYNTARO verify my number',
-    verifyTo: '9744917623'
+    verifyTo: '+919744917623'
   });
 }
 

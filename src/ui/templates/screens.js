@@ -159,9 +159,15 @@ export const onboardingScreen = () => layout({
         location.href = '/home';
         return;
       }
-      const text = 'VYNTARO verify my account';
-      const to = '9744917623';
-      window.location.href = 'https://wa.me/' + to + '?text=' + encodeURIComponent(text);
+      const text = 'VYNTARO verify my number';
+      const to = '+919744917623';
+      const waDigits = to.replace(/[^\d]/g, '');
+      window.location.href = 'whatsapp://send?phone=' + waDigits + '&text=' + encodeURIComponent(text);
+      setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          window.location.href = 'https://wa.me/' + waDigits + '?text=' + encodeURIComponent(text);
+        }
+      }, 900);
       setStatus('After sending the WhatsApp message, enter the OTP below and tap Verify again (valid for 5 minutes).');
       show('otp', true);
       otpStepActive = true;

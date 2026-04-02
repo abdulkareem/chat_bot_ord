@@ -73,23 +73,123 @@ export const chatScreen = () => layout({
 
 export const onboardingScreen = () => layout({
   title: 'Vyntaro • Onboarding',
-  body: `<section class="card"><h1>Vyntaro App Onboarding</h1><p id="statusText">Verify your number to continue</p><div class="grid"><input id="phone" placeholder="Phone number" /><input id="deviceId" placeholder="Device ID" /><button id="checkUser">Check Account</button><button id="verifyBtn">VERIFY</button><input id="otp" placeholder="Enter 6-digit OTP" /><button id="submitOtp">Submit OTP</button><select id="role"><option value="CUSTOMER">👤 Customer</option><option value="AUTO_DRIVER">🚖 Auto Driver</option><option value="SHOP_OWNER">🏪 Shop Owner</option></select><button id="saveRole">Save Role</button><button id="saveLocation">Save My Location</button><label><input id="consent" type="checkbox" /> I agree to terms.</label><button id="saveConsent">Accept Terms</button><select id="planType"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select><button id="startTrial">Start Free Trial</button><input id="paymentReference" placeholder="Payment reference" /><input id="paymentProofUrl" placeholder="Payment proof URL" /><button id="subscribeNow">Subscribe Now</button></div><pre id="output"></pre></section>`,
+  body: `<section class="card"><h1>Vyntaro App Onboarding</h1><p id="statusText">Checking your device...</p>
+    <div class="grid">
+      <input id="phone" placeholder="WhatsApp number" />
+      <input id="deviceId" placeholder="Device ID" />
+      <button id="checkUser">Check Device</button>
+      <button id="verifyBtn">Verify via WhatsApp</button>
+      <input id="otp" placeholder="Enter 6-digit OTP" style="display:none" />
+      <button id="submitOtp" style="display:none">Enter OTP</button>
+    </div>
+
+    <div id="roleCard" class="grid" style="display:none;margin-top:14px">
+      <h3>How do you want to use this app?</h3>
+      <select id="role"><option value="CUSTOMER">👤 Customer</option><option value="AUTO_DRIVER">🚖 Auto Driver</option><option value="SHOP_OWNER">🏪 Shop Owner</option></select>
+      <button id="continueRole">Continue</button>
+    </div>
+
+    <div id="customerCard" class="grid" style="display:none;margin-top:14px">
+      <input id="customerName" placeholder="Your name" />
+      <label><input id="consent" type="checkbox" /> I agree to Terms and permit legal usage of my number, name, location and chat history.</label>
+      <button id="saveCustomer">Finish Customer Setup</button>
+    </div>
+
+    <div id="driverCard" class="grid" style="display:none;margin-top:14px">
+      <input id="driverName" placeholder="Driver name" />
+      <input id="vehicleNumber" placeholder="Vehicle number" />
+      <input id="rcOwner" placeholder="RC owner name" />
+      <select id="driverPlan"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+      <button id="saveDriver">Save Driver Profile</button>
+    </div>
+
+    <div id="shopCard" class="grid" style="display:none;margin-top:14px">
+      <input id="shopName" placeholder="Shop name" />
+      <input id="ownerName" placeholder="Owner name" />
+      <input id="shopAddress" placeholder="Shop address" />
+      <input id="shopCategory" placeholder="Category" />
+      <select id="shopPlan"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+      <button id="saveShop">Save Shop Profile</button>
+      <small>Tip: Use mobile GPS for free map pinpoint accuracy.</small>
+    </div>
+    <pre id="output"></pre></section>`,
   script: `
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js');
     const output = document.getElementById('output');
     let token = null;
+    let userId = null;
+    let currentRole = null;
     const headers = () => ({ 'content-type': 'application/json', 'x-app-id': 'vyntaro', 'x-client-channel': 'pwa', ...(token ? { authorization: 'Bearer ' + token } : {}) });
     const print = (x) => output.textContent = JSON.stringify(x, null, 2);
     const setStatus = (text) => document.getElementById('statusText').textContent = text;
     async function post(path, body) { const res = await fetch(path, { method: 'POST', headers: headers(), body: JSON.stringify(body) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'request failed'); return data; }
-    document.getElementById('checkUser').onclick = async () => { const phone = document.getElementById('phone').value.trim(); const deviceId = document.getElementById('deviceId').value.trim(); const res = await fetch('/onboarding/status?phone=' + encodeURIComponent(phone) + '&device_id=' + encodeURIComponent(deviceId), { headers: { 'x-app-id': 'vyntaro', 'x-client-channel': 'pwa' } }); const data = await res.json(); print(data); setStatus(data.verify_prompt || ('Next step: ' + data.next_step)); if (data.next_step === 'chat') location.href = '/home'; };
-    document.getElementById('verifyBtn').onclick = async () => { const phone = document.getElementById('phone').value.trim(); const data = await post('/onboarding/request-otp', { phone }); setStatus('OTP sent on WhatsApp'); print(data); };
-    document.getElementById('submitOtp').onclick = async () => { const phone = document.getElementById('phone').value.trim(); const device_id = document.getElementById('deviceId').value.trim(); const otp = document.getElementById('otp').value.trim(); const data = await post('/onboarding/verify-otp', { phone, device_id, otp }); token = data.token; print(data); };
-    document.getElementById('saveRole').onclick = async () => print(await post('/onboarding/role', { role: document.getElementById('role').value }));
-    document.getElementById('saveLocation').onclick = async () => navigator.geolocation.getCurrentPosition(async (pos) => print(await post('/onboarding/location', { lat: pos.coords.latitude, lng: pos.coords.longitude, available: true })));
-    document.getElementById('saveConsent').onclick = async () => print(await post('/onboarding/consent', { accepted_terms: document.getElementById('consent').checked }));
-    document.getElementById('startTrial').onclick = async () => print(await post('/onboarding/subscription', { action: 'trial', plan_type: document.getElementById('planType').value }));
-    document.getElementById('subscribeNow').onclick = async () => print(await post('/onboarding/subscription', { action: 'subscribe', plan_type: document.getElementById('planType').value, payment_reference: document.getElementById('paymentReference').value, payment_proof_url: document.getElementById('paymentProofUrl').value }));
+    const show = (id, yes) => document.getElementById(id).style.display = yes ? 'block' : 'none';
+    const getLocation = () => new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve(null);
+      navigator.geolocation.getCurrentPosition((pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }), () => resolve(null), { timeout: 8000 });
+    });
+
+    document.getElementById('checkUser').onclick = async () => {
+      const whatsappNumber = document.getElementById('phone').value.trim();
+      const deviceId = document.getElementById('deviceId').value.trim() || ('web-' + Math.random().toString(36).slice(2));
+      const data = await post('/auth/whatsapp/initiate', { whatsappNumber, deviceId });
+      print(data);
+      if (data.mode === 'device_login' && data.token) {
+        token = data.token;
+        setStatus('Device already registered. Logged in.');
+        location.href = '/home';
+        return;
+      }
+      setStatus('Device not registered. Tap Verify via WhatsApp.');
+    };
+
+    document.getElementById('verifyBtn').onclick = async () => {
+      const text = 'VYNTARO verofy my account';
+      const to = '9744917623';
+      window.location.href = 'https://wa.me/' + to + '?text=' + encodeURIComponent(text);
+      setStatus('After sending WhatsApp message, enter OTP below (valid 5 minutes).');
+      show('otp', true);
+      show('submitOtp', true);
+      document.getElementById('verifyBtn').textContent = 'Waiting for OTP...';
+    };
+
+    document.getElementById('submitOtp').onclick = async () => {
+      const whatsappNumber = document.getElementById('phone').value.trim();
+      const deviceId = document.getElementById('deviceId').value.trim();
+      const otp = document.getElementById('otp').value.trim();
+      const location = await getLocation();
+      const data = await post('/auth/whatsapp/verify', { whatsappNumber, deviceId, otp, location });
+      token = data.token;
+      userId = data.user?.id || null;
+      print(data);
+      setStatus('OTP verified. Select your app usage mode.');
+      show('roleCard', true);
+    };
+
+    document.getElementById('continueRole').onclick = async () => {
+      currentRole = document.getElementById('role').value;
+      show('customerCard', currentRole === 'CUSTOMER');
+      show('driverCard', currentRole === 'AUTO_DRIVER');
+      show('shopCard', currentRole === 'SHOP_OWNER');
+    };
+
+    document.getElementById('saveCustomer').onclick = async () => {
+      const consentOk = document.getElementById('consent').checked;
+      const data = await post('/register/user', { name: document.getElementById('customerName').value.trim(), whatsappNumber: document.getElementById('phone').value.trim(), role: 'customer', consent: { acceptedTerms: consentOk } });
+      print(data); setStatus('Customer registration complete.');
+    };
+
+    document.getElementById('saveDriver').onclick = async () => {
+      const location = await getLocation();
+      const data = await post('/register/driver', { userId, driverName: document.getElementById('driverName').value.trim(), vehicleNumber: document.getElementById('vehicleNumber').value.trim(), rcOwner: document.getElementById('rcOwner').value.trim(), phone: document.getElementById('phone').value.trim(), planType: document.getElementById('driverPlan').value, location });
+      print(data); setStatus('Driver submitted. Free 1 month started. Wait for super admin approval.');
+    };
+
+    document.getElementById('saveShop').onclick = async () => {
+      const location = await getLocation();
+      const data = await post('/register/shop', { userId, shopName: document.getElementById('shopName').value.trim(), ownerName: document.getElementById('ownerName').value.trim(), shopAddress: document.getElementById('shopAddress').value.trim(), category: document.getElementById('shopCategory').value.trim(), phone: document.getElementById('phone').value.trim(), planType: document.getElementById('shopPlan').value, location });
+      print(data); setStatus('Shop submitted with map location. Free 1 month started. Wait for super admin approval.');
+    };
   `
 });
 

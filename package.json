@@ -8,7 +8,9 @@
     "deploy": "CI=1 wrangler deploy",
     "test": "node --test",
     "lint": "echo 'No linter configured'",
-    "db:init": "node scripts/init-db.js"
+    "db:init": "node scripts/init-db.js",
+    "db:audit": "node scripts/audit-sync.js",
+    "db:sync": "node scripts/audit-sync.js --apply"
   },
   "dependencies": {
     "postgres": "^3.4.5"

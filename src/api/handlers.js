@@ -27,6 +27,11 @@ function normalizePhone(phone) {
   return digits.startsWith('91') && digits.length === 12 ? `+${digits}` : `+${digits.replace(/^\+/, '')}`;
 }
 
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 function normalizeRole(role) {
   const value = String(role || '').trim().toLowerCase();
   if (value === 'customer') return ROLES.CUSTOMER;
@@ -205,6 +210,7 @@ export async function adminSendOtp(req, env) {
   if (scope.error) return scope.error;
   const { email } = await parse(req);
   const normalizedEmail = normalizeEmail(email);
+  if (!isNonEmptyString(normalizedEmail)) return json({ error: 'email is required' }, 400);
   if (normalizedEmail !== SUPER_ADMIN_EMAIL) return json({ error: 'invalid admin email' }, 403);
 
   const [recent] = await sql`
@@ -230,6 +236,7 @@ export async function adminVerifyOtp(req, env) {
   if (scope.error) return scope.error;
   const { email, otp } = await parse(req);
   const normalizedEmail = normalizeEmail(email);
+  if (!isNonEmptyString(normalizedEmail) || !isNonEmptyString(String(otp || ''))) return json({ error: 'email and otp are required' }, 400);
   const otpHash = await sha256Hex(String(otp || ''));
   const [row] = await sql`
     SELECT id, expiry FROM otp_verifications
@@ -295,6 +302,7 @@ export async function whatsappVerify(req, env) {
   const { whatsappNumber, otp, deviceId: requestedDeviceId, location } = await parse(req);
   const deviceId = resolveDeviceId(req, requestedDeviceId);
   const number = normalizePhone(whatsappNumber);
+  if (!number || !isNonEmptyString(String(otp || ''))) return json({ error: 'whatsappNumber and otp are required' }, 400);
   const otpHash = await sha256Hex(String(otp || ''));
   const [row] = await sql`SELECT id, expiry FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${number} AND channel = 'whatsapp' AND purpose = 'login' AND otp_hash = ${otpHash} AND is_verified = false ORDER BY created_at DESC LIMIT 1`;
   if (!row || new Date(row.expiry).getTime() < Date.now()) return json({ error: 'otp invalid/expired' }, 401);

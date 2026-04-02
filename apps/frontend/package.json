@@ -1,7 +1,10 @@
 {
   "name": "frontend-pwa",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "npx serve src -l 4173"
+    "dev": "npx serve src -l 4173",
+    "build": "rm -rf out && mkdir -p out && cp -R src/. out/ && cp -R public/. out/",
+    "preview": "npx serve out -l 4173"
   }
 }

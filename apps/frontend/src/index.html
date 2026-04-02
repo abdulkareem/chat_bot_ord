@@ -3,35 +3,129 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Hyperlocal Chat</title>
+    <title>Vyntaro</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="app">
-      <h1>Hyperlocal Chat Marketplace</h1>
-      <section id="auth" class="card">
-        <input id="phone" placeholder="Phone number" />
-        <button id="sendOtp">Send OTP</button>
-        <input id="otp" placeholder="OTP" />
-        <button id="verifyOtp">Verify OTP</button>
-      </section>
+    <main class="app-shell">
+      <header class="hero">
+        <p class="badge">VYNTARO</p>
+        <h1>The hyper-local commercial chat</h1>
+        <p class="sub">Find nearby shops, autos and taxis in one conversation.</p>
+      </header>
 
-      <section id="flow" class="card hidden">
-        <p>Type <strong>Hi</strong> to begin:</p>
-        <input id="messageInput" placeholder="Message" />
-        <button id="sendMsg">Send</button>
-        <div id="guidance"></div>
-      </section>
+      <section id="slider" class="slider">
+        <article class="slide active" data-slide="phone">
+          <h2>Welcome 👋</h2>
+          <p>Enter your WhatsApp number to continue.</p>
+          <label for="phone">WhatsApp number (without country code)</label>
+          <input id="phone" inputmode="numeric" placeholder="9876543210" maxlength="15" />
+          <button id="verifyPhone">Verify</button>
+          <p id="phoneHint" class="hint"></p>
+        </article>
 
-      <section id="results" class="card hidden">
-        <h2>Nearby & previous</h2>
-        <ul id="list"></ul>
-      </section>
+        <article class="slide" data-slide="waSent">
+          <h2>Verify in WhatsApp</h2>
+          <p>
+            WhatsApp opens with the message <strong>"VYNTARO verify my number"</strong> to
+            <strong>+91 97449 17623</strong>.
+          </p>
+          <p class="hint">Once sent, continue to receive OTP.</p>
+          <button id="continueAfterWa">I have sent the message</button>
+        </article>
 
-      <section id="chat" class="card hidden">
-        <h2>Live Chat</h2>
-        <div id="feed"></div>
+        <article class="slide" data-slide="otp">
+          <h2>Enter OTP</h2>
+          <p>We sent a 6-digit OTP to your WhatsApp number.</p>
+          <input id="otp" inputmode="numeric" placeholder="123456" maxlength="6" />
+          <button id="verifyOtp">Verify OTP</button>
+          <p id="otpHint" class="hint"></p>
+        </article>
+
+        <article class="slide" data-slide="roleCustomer">
+          <h2>Are you a customer?</h2>
+          <div class="row-buttons">
+            <button id="customerYes">Yes</button>
+            <button class="secondary" id="customerNo">No</button>
+          </div>
+        </article>
+
+        <article class="slide" data-slide="roleDriver">
+          <h2>Are you a driver?</h2>
+          <div class="row-buttons">
+            <button id="driverYes">Yes</button>
+            <button class="secondary" id="driverNo">No</button>
+          </div>
+        </article>
+
+        <article class="slide" data-slide="roleShop">
+          <h2>Are you a shop owner?</h2>
+          <div class="row-buttons">
+            <button id="shopYes">Yes</button>
+            <button class="secondary" id="shopNo">No, go as customer</button>
+          </div>
+        </article>
+
+        <article class="slide" data-slide="customerDetails">
+          <h2>Customer profile</h2>
+          <input id="customerName" placeholder="Your name" />
+          <button id="captureLocation">Get location</button>
+          <p id="locationLabel" class="hint">Location not captured yet.</p>
+          <label class="check">
+            <input id="agreement" type="checkbox" />
+            I agree to the Vyntaro terms and privacy.
+          </label>
+          <button id="completeCustomer">Continue to chat</button>
+        </article>
+
+        <article class="slide" data-slide="driverVehicleType">
+          <h2>Driver onboarding</h2>
+          <p>Do you drive an auto?</p>
+          <div class="row-buttons">
+            <button id="autoYes">Yes, Auto</button>
+            <button class="secondary" id="autoNo">No</button>
+          </div>
+          <p>Do you drive a taxi?</p>
+          <div class="row-buttons">
+            <button id="taxiYes">Yes, Taxi</button>
+            <button class="secondary" id="taxiNo">No, go as customer</button>
+          </div>
+        </article>
+
+        <article class="slide" data-slide="driverDetails">
+          <h2>Vehicle details</h2>
+          <input id="driverName" placeholder="Driver name" />
+          <input id="vehicleNumber" placeholder="Vehicle number" />
+          <input id="licenseNumber" placeholder="License number" />
+          <input id="ownerName" placeholder="Owner name" />
+          <button id="toSubscription">Continue</button>
+        </article>
+
+        <article class="slide" data-slide="subscription">
+          <h2>Select subscription</h2>
+          <div class="plans">
+            <button class="plan" data-plan="monthly">Monthly subscription</button>
+            <button class="plan" data-plan="yearly">Yearly subscription</button>
+          </div>
+          <p class="hint">1 month free usage is applied automatically.</p>
+          <button id="completeDriver">Submit for verification</button>
+        </article>
+
+        <article class="slide" data-slide="pending">
+          <h2>Thanks! ✅</h2>
+          <p>Your profile is submitted. Please wait until verification is complete.</p>
+        </article>
+
+        <article class="slide" data-slide="chatBox">
+          <h2>Chat</h2>
+          <p>Type <strong>Hi</strong> to begin.</p>
+          <input id="messageInput" placeholder="Message" />
+          <button id="sendMsg">Send</button>
+          <div id="guidance"></div>
+          <ul id="list"></ul>
+          <div id="feed"></div>
+        </article>
       </section>
     </main>
     <script type="module" src="/app.js"></script>

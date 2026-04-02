@@ -42,11 +42,12 @@ async function sha256Hex(input) {
 async function createOtpRecord(sql, { contact, channel, purpose }) {
   const otp = generateSixDigitOtp();
   const otpHash = await sha256Hex(otp);
-  await sql`
+  const [row] = await sql`
     INSERT INTO otp_verifications (app_id, contact, channel, purpose, otp_hash, expiry, is_verified)
     VALUES (${APP_ID}, ${contact}, ${channel}, ${purpose}, ${otpHash}, NOW() + (${OTP_EXPIRY_MINUTES} * INTERVAL '1 minute'), false)
+    RETURNING id
   `;
-  return { otp, otpHash };
+  return { otp, otpHash, otpId: row?.id || null };
 }
 
 function enforceApp(req, channel) {
@@ -65,14 +66,18 @@ async function parse(req) {
   }
 }
 
-async function sendResendEmail(env, to, otp) {
-  if (!env.RESEND_API_KEY) return { simulated: true };
-  const payload = {
+function buildAdminOtpEmailPayload(to, otp) {
+  return {
     from: 'noreply@aureliv.in',
     to: [to],
     subject: 'VYNTARO Admin OTP',
     html: `<p>Your VYNTARO admin OTP is <b>${otp}</b>. It expires in ${OTP_EXPIRY_MINUTES} minutes.</p>`
   };
+}
+
+async function sendResendEmail(env, to, otp) {
+  if (!env.RESEND_API_KEY) return { simulated: true, provider: 'resend', messageId: null };
+  const payload = buildAdminOtpEmailPayload(to, otp);
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -85,7 +90,8 @@ async function sendResendEmail(env, to, otp) {
     const body = await res.text();
     throw new Error(`Resend failed: ${body}`);
   }
-  return { simulated: false };
+  const data = await res.json().catch(() => ({}));
+  return { simulated: false, provider: 'resend', messageId: data?.id || null };
 }
 
 async function sendWhatsAppOtp(env, phone, otp) {
@@ -193,8 +199,11 @@ export async function adminSendOtp(req, env) {
     return json({ error: 'otp recently sent, please wait' }, 429);
   }
 
-  const { otp } = await createOtpRecord(sql, { contact: normalizedEmail, channel: 'email', purpose: 'admin_login' });
-  await sendResendEmail(env, normalizedEmail, otp);
+  const { otp, otpId } = await createOtpRecord(sql, { contact: normalizedEmail, channel: 'email', purpose: 'admin_login' });
+  const delivery = await sendResendEmail(env, normalizedEmail, otp);
+  if (otpId) {
+    await sql`UPDATE otp_verifications SET provider = ${delivery.provider || null}, provider_message_id = ${delivery.messageId || null} WHERE id = ${otpId}`;
+  }
   return json({ ok: true, expiresInSeconds: OTP_EXPIRY_MINUTES * 60, ...(env.DEV_EXPOSE_OTP ? { otp } : {}) });
 }
 
@@ -413,5 +422,6 @@ export const __test = {
   normalizePhone,
   normalizeRole,
   generateSixDigitOtp,
-  sha256Hex
+  sha256Hex,
+  buildAdminOtpEmailPayload
 };

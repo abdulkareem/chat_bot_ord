@@ -179,6 +179,8 @@ CREATE TABLE IF NOT EXISTS otp_verifications (
   purpose TEXT NOT NULL,
   otp_hash TEXT NOT NULL,
   expiry TIMESTAMPTZ NOT NULL,
+  provider TEXT,
+  provider_message_id TEXT,
   is_verified BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );

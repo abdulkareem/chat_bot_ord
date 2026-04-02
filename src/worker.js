@@ -15,29 +15,16 @@ function validateRequiredEnv(env) {
 }
 
 const routes = [
-  ['POST', '/admin/send-otp', api.adminSendOtp],
-  ['POST', '/admin/verify-otp', api.adminVerifyOtp],
+  ['POST', '/auth/admin/send-otp', api.adminSendOtp],
+  ['POST', '/auth/admin/verify-otp', api.adminVerifyOtp],
+  ['POST', '/auth/whatsapp/initiate', api.whatsappInitiate],
+  ['POST', '/auth/whatsapp/verify', api.whatsappVerify],
+  ['POST', '/register/user', api.registerUser],
+  ['POST', '/register/shop', api.registerShop],
+  ['POST', '/register/driver', api.registerDriver],
+  ['POST', '/webhooks/whatsapp', api.whatsappWebhook],
   ['GET', '/admin/users', api.adminUsers],
-  ['GET', '/admin/chats', api.adminChats],
-  ['GET', '/admin/subscriptions', api.adminSubscriptions],
-  ['GET', '/admin/analytics', api.adminAnalytics],
-  ['POST', '/auth/login', api.login],
-  ['POST', '/onboarding/verify', api.onboardingVerify],
-  ['GET', '/onboarding/status', api.onboardingStatus],
-  ['POST', '/onboarding/request-otp', api.onboardingRequestOtp],
-  ['POST', '/onboarding/verify-otp', api.onboardingVerifyOtp],
-  ['POST', '/onboarding/role', api.onboardingRole],
-  ['POST', '/onboarding/location', api.onboardingLocation],
-  ['POST', '/onboarding/consent', api.onboardingConsent],
-  ['POST', '/onboarding/subscription', api.onboardingSubscription],
-  ['POST', '/admin/onboarding/approve', api.adminApproveOnboarding],
-  ['POST', '/subscription/upload', api.subscriptionUpload],
-  ['POST', '/subscription/verify', api.subscriptionVerify],
-  ['GET', '/subscription/status', api.subscriptionStatus],
-  ['GET', '/nearby/drivers', api.nearbyDrivers],
-  ['GET', '/nearby/shops', api.nearbyShops],
-  ['POST', '/chat/start', api.chatStart],
-  ['POST', '/chat/message', api.chatMessage]
+  ['POST', '/admin/approve', api.adminApprove]
 ];
 
 export { ChatRoomDO };

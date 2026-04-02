@@ -127,21 +127,29 @@ async function sendResendEmail(env, to, otp) {
 }
 
 async function sendWhatsAppOtp(env, phone, otp) {
-  const apiUrl = env.WHATSAPP_API_URL;
+  const apiUrl = env.WHATSAPP_API_URL || (env.API_BASE_URL ? `${String(env.API_BASE_URL).replace(/\/$/, '')}/api/messages/send` : null);
   const apiKey = env.APP_API_KEY || env.WHATSAPP_API_TOKEN;
   if (!apiUrl || !apiKey) return { simulated: true };
+  const normalized = String(phone || '').trim();
+  const digits = normalized.replace(/[^\d]/g, '');
+  const defaultCountryCode = String(env.WHATSAPP_COUNTRY_CODE || '').trim();
+  const countryCode = normalized.startsWith('+')
+    ? `+${digits.slice(0, Math.max(0, digits.length - 10))}`
+    : (defaultCountryCode || null);
+  const mobile = normalized.startsWith('+') && digits.length > 10 ? digits.slice(-10) : digits;
   const res = await fetch(apiUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
+      'X-APP-KEY': apiKey,
       APP_API_KEY: apiKey,
-      'x-api-key': apiKey,
+      'X-API-KEY': apiKey,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      to: phone,
-      type: 'text',
-      text: `Your VYNTARO OTP is ${otp}. Expires in ${OTP_EXPIRY_MINUTES} minutes.`
+      mobile,
+      ...(countryCode ? { countryCode } : {}),
+      message: `Your VYNTARO OTP is ${otp}. Expires in ${OTP_EXPIRY_MINUTES} minutes.`
     })
   });
   if (!res.ok) {
@@ -149,6 +157,23 @@ async function sendWhatsAppOtp(env, phone, otp) {
     throw new Error(`WhatsApp send failed: ${body}`);
   }
   return { simulated: false };
+}
+
+function parseInboundWhatsapp(payload) {
+  const root = payload?.entry?.[0]?.changes?.[0]?.value || payload || {};
+  const message = root?.messages?.[0] || {};
+  const fullText = String(payload?.message || payload?.text?.body || message?.text?.body || '').trim();
+  const fromRaw = payload?.from || payload?.wa_id || payload?.phone || message?.from || '';
+  const from = normalizePhone(fromRaw);
+  const [first = '', ...rest] = fullText.split(/\s+/);
+  const keyword = first.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  const command = rest.join(' ').trim();
+  return {
+    from,
+    fullText,
+    keyword,
+    command
+  };
 }
 
 function resolveDeviceId(req, providedDeviceId) {
@@ -304,9 +329,13 @@ export async function whatsappInitiate(req, env) {
 export async function whatsappWebhook(req, env) {
   const sql = getDb(env);
   const payload = await parse(req);
-  const from = normalizePhone(payload.from || payload.wa_id || payload.phone);
-  const body = String(payload.message || payload.text?.body || '').trim().toLowerCase();
-  if (!from || !WHATSAPP_VERIFY_TEXTS.includes(body)) return json({ ok: true, ignored: true });
+  const { from, fullText, keyword, command } = parseInboundWhatsapp(payload);
+  const body = fullText.toLowerCase();
+  if (!from || !keyword) return json({ ok: true, ignored: true });
+  const isVerifyCommand = keyword === 'VYNTARO' && (WHATSAPP_VERIFY_TEXTS.includes(body) || /verify my (account|number)/.test(command.toLowerCase()));
+  if (!isVerifyCommand) {
+    return json({ ok: true, ignored: true, keyword, command });
+  }
 
   const [session] = await sql`
     SELECT id FROM onboarding_sessions
@@ -623,5 +652,6 @@ export const __test = {
   normalizeVehicleCategory,
   generateSixDigitOtp,
   sha256Hex,
-  buildAdminOtpEmailPayload
+  buildAdminOtpEmailPayload,
+  parseInboundWhatsapp
 };

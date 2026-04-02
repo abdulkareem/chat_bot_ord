@@ -36,3 +36,22 @@ test('builds resend email payload using aureliv domain', () => {
   assert.deepEqual(payload.to, ['abdulkareem@psmocollege.ac.in']);
   assert.match(payload.html, /654321/);
 });
+
+test('parses meta inbound webhook into keyword and command', () => {
+  const parsed = __test.parseInboundWhatsapp({
+    entry: [{
+      changes: [{
+        value: {
+          messages: [{
+            from: '12025550199',
+            text: { body: 'order create shipment 7781' }
+          }]
+        }
+      }]
+    }]
+  });
+  assert.equal(parsed.from, '+12025550199');
+  assert.equal(parsed.keyword, 'ORDER');
+  assert.equal(parsed.command, 'create shipment 7781');
+  assert.equal(parsed.fullText, 'order create shipment 7781');
+});

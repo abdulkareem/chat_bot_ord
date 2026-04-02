@@ -26,6 +26,7 @@ const routes = [
   ['POST', '/chat/start', api.chatStart],
   ['POST', '/chat/message', api.chatMessage],
   ['POST', '/webhooks/whatsapp', api.whatsappWebhook],
+  ['POST', '/webhook', api.whatsappWebhook],
   ['GET', '/admin/users', api.adminUsers],
   ['POST', '/admin/approve', api.adminApprove]
 ];

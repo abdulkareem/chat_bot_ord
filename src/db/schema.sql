@@ -1,10 +1,32 @@
-CREATE TYPE user_role AS ENUM ('SUPER_ADMIN','CUSTOMER','AUTO_DRIVER','SHOP_OWNER');
-CREATE TYPE verification_status AS ENUM ('pending','approved','rejected');
-CREATE TYPE sub_plan AS ENUM ('monthly','yearly');
-CREATE TYPE sub_status AS ENUM ('active','expired','pending');
-CREATE TYPE message_type AS ENUM ('text','image','location','offer_card','bill','payment_proof','system');
+BEGIN;
 
-CREATE TABLE users (
+DO $$ BEGIN
+  CREATE TYPE user_role AS ENUM ('SUPER_ADMIN','CUSTOMER','AUTO_DRIVER','SHOP_OWNER');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  CREATE TYPE verification_status AS ENUM ('pending','approved','rejected');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  CREATE TYPE sub_plan AS ENUM ('monthly','yearly');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  CREATE TYPE sub_status AS ENUM ('active','expired','pending');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  CREATE TYPE message_type AS ENUM ('text','image','location','offer_card','bill','payment_proof','system');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   name TEXT,
@@ -25,7 +47,7 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE shops (
+CREATE TABLE IF NOT EXISTS shops (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -35,7 +57,7 @@ CREATE TABLE shops (
   address TEXT
 );
 
-CREATE TABLE drivers (
+CREATE TABLE IF NOT EXISTS drivers (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -44,7 +66,7 @@ CREATE TABLE drivers (
   vehicle_registration_doc_url TEXT
 );
 
-CREATE TABLE verification_documents (
+CREATE TABLE IF NOT EXISTS verification_documents (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
@@ -55,7 +77,7 @@ CREATE TABLE verification_documents (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE subscriptions (
+CREATE TABLE IF NOT EXISTS subscriptions (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
@@ -75,7 +97,7 @@ CREATE TABLE subscriptions (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE otp_codes (
+CREATE TABLE IF NOT EXISTS otp_codes (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   phone TEXT NOT NULL,
@@ -85,7 +107,7 @@ CREATE TABLE otp_codes (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE consents (
+CREATE TABLE IF NOT EXISTS consents (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
@@ -97,7 +119,7 @@ CREATE TABLE consents (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE chats (
+CREATE TABLE IF NOT EXISTS chats (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_a BIGINT REFERENCES users(id),
@@ -107,7 +129,7 @@ CREATE TABLE chats (
   UNIQUE(user_a, user_b)
 );
 
-CREATE TABLE messages (
+CREATE TABLE IF NOT EXISTS messages (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   chat_id BIGINT REFERENCES chats(id) ON DELETE CASCADE,
@@ -117,7 +139,7 @@ CREATE TABLE messages (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE offers (
+CREATE TABLE IF NOT EXISTS offers (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   shop_id BIGINT REFERENCES users(id),
@@ -128,7 +150,7 @@ CREATE TABLE offers (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   chat_id BIGINT REFERENCES chats(id),
@@ -139,7 +161,7 @@ CREATE TABLE orders (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE analytics_events (
+CREATE TABLE IF NOT EXISTS analytics_events (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT REFERENCES users(id),
@@ -148,7 +170,7 @@ CREATE TABLE analytics_events (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE admin_otps (
+CREATE TABLE IF NOT EXISTS admin_otps (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   email TEXT NOT NULL,
@@ -158,12 +180,12 @@ CREATE TABLE admin_otps (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_users_discovery ON users(app_id, role, active, is_verified, verification_status, discoverable);
-CREATE INDEX idx_messages_chat_created ON messages(app_id, chat_id, created_at DESC);
-CREATE INDEX idx_subscriptions_user_end ON subscriptions(app_id, user_id, end_date DESC);
-CREATE INDEX idx_admin_otps_email_created ON admin_otps(app_id, email, created_at DESC);
-CREATE INDEX idx_users_phone_device ON users(app_id, phone, device_id);
-CREATE INDEX idx_otp_codes_phone_created ON otp_codes(app_id, phone, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_users_discovery ON users(app_id, role, active, is_verified, verification_status, discoverable);
+CREATE INDEX IF NOT EXISTS idx_messages_chat_created ON messages(app_id, chat_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user_end ON subscriptions(app_id, user_id, end_date DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_otps_email_created ON admin_otps(app_id, email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_users_phone_device ON users(app_id, phone, device_id);
+CREATE INDEX IF NOT EXISTS idx_otp_codes_phone_created ON otp_codes(app_id, phone, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS devices (
   id BIGSERIAL PRIMARY KEY,
@@ -211,3 +233,5 @@ CREATE INDEX IF NOT EXISTS idx_devices_user_last_login ON devices(app_id, user_i
 CREATE INDEX IF NOT EXISTS idx_otp_verifications_contact ON otp_verifications(app_id, contact, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_device ON onboarding_sessions(app_id, device_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_otp_verifications_expiry ON otp_verifications(app_id, expiry);
+
+COMMIT;

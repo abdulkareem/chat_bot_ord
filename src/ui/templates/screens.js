@@ -183,12 +183,20 @@ export const onboardingScreen = () => layout({
     };
 
     document.getElementById('saveDriver').onclick = async () => {
+      if (!userId) {
+        setStatus('Please complete OTP verification first.');
+        return;
+      }
       const location = await getLocation();
       const data = await post('/register/driver', { userId, driverName: document.getElementById('driverName').value.trim(), vehicleNumber: document.getElementById('vehicleNumber').value.trim(), rcOwner: document.getElementById('rcOwner').value.trim(), phone: document.getElementById('phone').value.trim(), planType: document.getElementById('driverPlan').value, location });
       print(data); setStatus('Driver submitted. Free 1 month started. Wait for super admin approval.');
     };
 
     document.getElementById('saveShop').onclick = async () => {
+      if (!userId) {
+        setStatus('Please complete OTP verification first.');
+        return;
+      }
       const location = await getLocation();
       const data = await post('/register/shop', { userId, shopName: document.getElementById('shopName').value.trim(), ownerName: document.getElementById('ownerName').value.trim(), shopAddress: document.getElementById('shopAddress').value.trim(), category: document.getElementById('shopCategory').value.trim(), phone: document.getElementById('phone').value.trim(), planType: document.getElementById('shopPlan').value, location });
       print(data); setStatus('Shop submitted with map location. Free 1 month started. Wait for super admin approval.');

@@ -22,6 +22,9 @@ const routes = [
   ['POST', '/register/user', api.registerUser],
   ['POST', '/register/shop', api.registerShop],
   ['POST', '/register/driver', api.registerDriver],
+  ['GET', '/nearby/drivers', api.nearbyDrivers],
+  ['POST', '/chat/start', api.chatStart],
+  ['POST', '/chat/message', api.chatMessage],
   ['POST', '/webhooks/whatsapp', api.whatsappWebhook],
   ['GET', '/admin/users', api.adminUsers],
   ['POST', '/admin/approve', api.adminApprove]

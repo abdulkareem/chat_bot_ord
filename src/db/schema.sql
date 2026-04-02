@@ -61,9 +61,14 @@ CREATE TABLE IF NOT EXISTS drivers (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
   user_id BIGINT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  vehicle_type TEXT NOT NULL DEFAULT 'AUTO',
+  vehicle_category TEXT,
   vehicle_number TEXT,
   license_number TEXT,
-  vehicle_registration_doc_url TEXT
+  vehicle_registration_doc_url TEXT,
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS verification_documents (
@@ -161,6 +166,16 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS leads (
+  id BIGSERIAL PRIMARY KEY,
+  app_id TEXT NOT NULL DEFAULT 'vyntaro',
+  user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+  driver_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+  chat_id BIGINT REFERENCES chats(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(app_id, user_id, driver_id)
+);
+
 CREATE TABLE IF NOT EXISTS analytics_events (
   id BIGSERIAL PRIMARY KEY,
   app_id TEXT NOT NULL DEFAULT 'vyntaro',
@@ -224,6 +239,11 @@ CREATE TABLE IF NOT EXISTS onboarding_sessions (
 
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS rc_owner TEXT;
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'pending';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS vehicle_type TEXT DEFAULT 'AUTO';
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS vehicle_category TEXT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
 ALTER TABLE shops ADD COLUMN IF NOT EXISTS category TEXT;
 ALTER TABLE shops ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
 ALTER TABLE shops ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
@@ -233,5 +253,7 @@ CREATE INDEX IF NOT EXISTS idx_devices_user_last_login ON devices(app_id, user_i
 CREATE INDEX IF NOT EXISTS idx_otp_verifications_contact ON otp_verifications(app_id, contact, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_device ON onboarding_sessions(app_id, device_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_otp_verifications_expiry ON otp_verifications(app_id, expiry);
+CREATE INDEX IF NOT EXISTS idx_drivers_location ON drivers(app_id, latitude, longitude);
+CREATE INDEX IF NOT EXISTS idx_leads_lookup ON leads(app_id, user_id, driver_id, created_at DESC);
 
 COMMIT;

@@ -1,4 +1,5 @@
 const API = localStorage.getItem('workerUrl') || 'http://localhost:8787';
+const WHATSAPP_VERIFY_NUMBER = '919744917623';
 let token = localStorage.getItem('token');
 let roomId = null;
 let socket = null;
@@ -39,7 +40,7 @@ function detectCountryCode() {
   return map[suffix] || '+91';
 }
 
-$('verifyPhone').onclick = () => {
+$('verifyPhone').onclick = async () => {
   const localNumber = $('phone').value.trim().replace(/\D/g, '');
   if (localNumber.length < 8) {
     $('phoneHint').textContent = 'Please enter a valid WhatsApp number.';
@@ -49,36 +50,47 @@ $('verifyPhone').onclick = () => {
   const countryCode = detectCountryCode();
   fullPhone = `${countryCode}${localNumber}`;
   onboardingState.profile.phone = fullPhone;
-  $('phoneHint').textContent = `Detected ${countryCode}. Using ${fullPhone}`;
+  $('phoneHint').textContent = `Detected ${countryCode}. We will verify ${fullPhone}`;
 
-  const message = encodeURIComponent(`VYNTARO verify my number ${fullPhone}`);
-  const waUrl = `https://wa.me/919744917623?text=${message}`;
-  window.open(waUrl, '_blank');
-  showSlide('waSent');
-};
-
-$('continueAfterWa').onclick = async () => {
   try {
-    const res = await fetch(`${API}/auth/send-otp`, {
+    const res = await fetch(`${API}/auth/whatsapp/initiate`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-device-id': onboardingState.deviceId },
-      body: JSON.stringify({ phone: fullPhone })
+      headers: {
+        'content-type': 'application/json',
+        'x-device-id': onboardingState.deviceId,
+        'x-app-id': 'vyntaro',
+        'x-client-channel': 'pwa'
+      },
+      body: JSON.stringify({ whatsappNumber: fullPhone, deviceId: onboardingState.deviceId })
     });
-    if (!res.ok) throw new Error('Failed to send OTP');
+    if (!res.ok) throw new Error('Failed to initiate WhatsApp verification');
+
+    const message = encodeURIComponent('VYNTARO verify my number');
+    const waUrl = `https://wa.me/${WHATSAPP_VERIFY_NUMBER}?text=${message}`;
+    window.open(waUrl, '_blank');
+    $('otpHint').textContent = 'After sending the WhatsApp message, wait for OTP and enter it here.';
     showSlide('otp');
   } catch {
-    $('phoneHint').textContent = 'Could not send OTP. Please retry.';
-    showSlide('phone');
+    $('phoneHint').textContent = 'Could not start WhatsApp verification. Please retry.';
   }
 };
 
 $('verifyOtp').onclick = async () => {
   const otp = $('otp').value.trim();
+  if (!otp || otp.length !== 6) {
+    $('otpHint').textContent = 'Please enter a valid 6-digit OTP.';
+    return;
+  }
   try {
-    const res = await fetch(`${API}/auth/verify-otp`, {
+    const res = await fetch(`${API}/auth/whatsapp/verify`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-device-id': onboardingState.deviceId },
-      body: JSON.stringify({ phone: fullPhone, otp })
+      headers: {
+        'content-type': 'application/json',
+        'x-device-id': onboardingState.deviceId,
+        'x-app-id': 'vyntaro',
+        'x-client-channel': 'pwa'
+      },
+      body: JSON.stringify({ whatsappNumber: fullPhone, otp, deviceId: onboardingState.deviceId })
     });
     const data = await res.json();
     if (!res.ok || !data.token) throw new Error();

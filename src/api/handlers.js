@@ -11,10 +11,14 @@ const OTP_WINDOW_MINUTES = 10;
 const OTP_MAX_REQUESTS = 3;
 const WHATSAPP_VERIFY_TEXTS = [
   'vyntaro verify my account',
+  'vyntaro verify my number',
   'vytnaro verify my account',
+  'vytnaro verify my number',
   'vyntaro',
   'vyntaro verify my account.',
+  'vyntaro verify my number.',
   'vytnaro verify my account.',
+  'vytnaro verify my number.',
   'vyntaro.'
 ];
 
@@ -291,8 +295,8 @@ export async function whatsappInitiate(req, env) {
     exists: !!user,
     requiresWhatsAppVerification: true,
     next: 'send_whatsapp_verify_message',
-    instruction: 'Send "VYNTARO verify my account" from your WhatsApp to continue.',
-    whatsappIntentText: 'VYNTARO verify my account',
+    instruction: 'Send "VYNTARO verify my number" from your WhatsApp to continue.',
+    whatsappIntentText: 'VYNTARO verify my number',
     verifyTo: '9744917623'
   });
 }
@@ -304,11 +308,26 @@ export async function whatsappWebhook(req, env) {
   const body = String(payload.message || payload.text?.body || '').trim().toLowerCase();
   if (!from || !WHATSAPP_VERIFY_TEXTS.includes(body)) return json({ ok: true, ignored: true });
 
+  const [session] = await sql`
+    SELECT id FROM onboarding_sessions
+    WHERE app_id = ${APP_ID} AND contact = ${from} AND status = 'pending'
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `;
+  if (!session) {
+    return json({ ok: true, ignored: true, reason: 'number_not_in_pending_onboarding' });
+  }
+
   const [rate] = await sql`SELECT COUNT(*)::int AS count FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${from} AND channel = 'whatsapp' AND created_at >= NOW() - (${OTP_WINDOW_MINUTES} * INTERVAL '1 minute')`;
   if (rate.count >= OTP_MAX_REQUESTS) return json({ error: 'too many otp requests' }, 429);
 
   const { otp } = await createOtpRecord(sql, { contact: from, channel: 'whatsapp', purpose: 'login' });
   await sendWhatsAppOtp(env, from, otp);
+  await sql`
+    UPDATE onboarding_sessions
+    SET status = 'otp_sent', updated_at = NOW()
+    WHERE id = ${session.id}
+  `;
   return json({ ok: true, ...(env.DEV_EXPOSE_OTP ? { otp } : {}) });
 }
 

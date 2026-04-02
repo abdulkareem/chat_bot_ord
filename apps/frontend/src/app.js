@@ -31,13 +31,49 @@ function getOrCreateDeviceId() {
   return id;
 }
 
-function detectCountryCode() {
+const COUNTRY_DIAL_CODE_MAP = {
+  IN: '+91', US: '+1', CA: '+1', GB: '+44', AE: '+971', SA: '+966', AU: '+61', SG: '+65'
+};
+
+function detectCountryFromLocale() {
   const locale = (navigator.language || '').toUpperCase();
-  const map = {
-    IN: '+91', US: '+1', CA: '+1', GB: '+44', AE: '+971', SA: '+966', AU: '+61', SG: '+65'
-  };
-  const suffix = locale.split('-')[1];
-  return map[suffix] || '+91';
+  return locale.split('-')[1] || null;
+}
+
+function detectCountryCodeFromLocale() {
+  const country = detectCountryFromLocale();
+  return COUNTRY_DIAL_CODE_MAP[country] || '+1';
+}
+
+function getCurrentPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('geolocation_unavailable'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: false,
+      timeout: 2500,
+      maximumAge: 300000
+    });
+  });
+}
+
+async function detectCountryCode() {
+  try {
+    const { coords } = await getCurrentPosition();
+    const reverseUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coords.latitude}&lon=${coords.longitude}`;
+    const res = await fetch(reverseUrl, { headers: { accept: 'application/json' } });
+    if (res.ok) {
+      const data = await res.json();
+      const country = data?.address?.country_code?.toUpperCase();
+      if (country && COUNTRY_DIAL_CODE_MAP[country]) return COUNTRY_DIAL_CODE_MAP[country];
+    }
+  } catch {
+    // Fallback to locale-based detection.
+  }
+
+  return detectCountryCodeFromLocale();
 }
 
 $('verifyPhone').onclick = async () => {
@@ -47,13 +83,13 @@ $('verifyPhone').onclick = async () => {
     return;
   }
 
-  const countryCode = detectCountryCode();
+  const countryCode = await detectCountryCode();
   fullPhone = `${countryCode}${localNumber}`;
   onboardingState.profile.phone = fullPhone;
   $('phoneHint').textContent = `Detected ${countryCode}. We will verify ${fullPhone}`;
 
   try {
-    const res = await fetch(`${API}/auth/whatsapp/initiate`, {
+    const res = await fetch(`${API}/auth/send-otp`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -61,18 +97,28 @@ $('verifyPhone').onclick = async () => {
         'x-app-id': 'vyntaro',
         'x-client-channel': 'pwa'
       },
-      body: JSON.stringify({ whatsappNumber: fullPhone, deviceId: onboardingState.deviceId })
+      body: JSON.stringify({ phone: fullPhone })
     });
     if (!res.ok) throw new Error('Failed to initiate WhatsApp verification');
 
     const message = encodeURIComponent('VYNTARO verify my number');
     const waDigits = WHATSAPP_VERIFY_NUMBER.replace(/[^\d]/g, '');
     const nativeWaUrl = `whatsapp://send?phone=${waDigits}&text=${message}`;
+    const androidIntentUrl = `intent://send?phone=${waDigits}&text=${message}#Intent;scheme=whatsapp;package=com.whatsapp;end`;
     const fallbackWaUrl = `https://wa.me/${waDigits}?text=${message}`;
-    window.location.href = nativeWaUrl;
+
+    window.location.assign(nativeWaUrl);
     setTimeout(() => {
-      if (document.visibilityState === 'visible') window.location.href = fallbackWaUrl;
+      if (document.visibilityState === 'visible') {
+        window.location.assign(androidIntentUrl);
+      }
     }, 900);
+    setTimeout(() => {
+      if (document.visibilityState === 'visible') {
+        window.location.assign(fallbackWaUrl);
+      }
+    }, 1700);
+
     $('otpHint').textContent = 'After sending the WhatsApp message, wait for OTP and enter it here.';
     showSlide('otp');
   } catch {
@@ -87,7 +133,7 @@ $('verifyOtp').onclick = async () => {
     return;
   }
   try {
-    const res = await fetch(`${API}/auth/whatsapp/verify`, {
+    const res = await fetch(`${API}/auth/verify-otp`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -95,7 +141,7 @@ $('verifyOtp').onclick = async () => {
         'x-app-id': 'vyntaro',
         'x-client-channel': 'pwa'
       },
-      body: JSON.stringify({ whatsappNumber: fullPhone, otp, deviceId: onboardingState.deviceId })
+      body: JSON.stringify({ phone: fullPhone, otp })
     });
     const data = await res.json();
     if (!res.ok || !data.token) throw new Error();

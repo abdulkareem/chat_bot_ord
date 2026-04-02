@@ -1,0 +1,140 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  VENDOR
+  DRIVER
+  ADMIN
+}
+
+enum VendorCategory {
+  SUPERMARKET
+  GROCERY
+  FANCY
+  HOTEL
+  TEA_SHOP
+}
+
+enum VehicleType {
+  AUTO
+  TAXI
+}
+
+enum OrderType {
+  ORDER
+  RIDE
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String?
+  phone        String   @unique
+  role         Role
+  lastLatitude Float?
+  lastLongitude Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  vendor       Vendor?
+  driver       Driver?
+
+  customerRooms ChatRoom[] @relation("CustomerRooms")
+  sentMessages  Message[]
+
+  initiatedOrders OrderRide[] @relation("OrderInitiator")
+
+  @@index([lastLatitude, lastLongitude])
+}
+
+model Vendor {
+  id        String         @id @default(cuid())
+  userId    String         @unique
+  category  VendorCategory
+  isPaid    Boolean        @default(false)
+  rating    Float          @default(0)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatRooms ChatRoom[]
+  orders    OrderRide[]
+
+  @@index([isPaid, rating])
+}
+
+model Driver {
+  id          String      @id @default(cuid())
+  userId      String      @unique
+  vehicleType VehicleType
+  isAvailable Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatRooms   ChatRoom[]
+  rides       OrderRide[]
+
+  @@index([vehicleType, isAvailable])
+}
+
+model ChatRoom {
+  id         String     @id @default(cuid())
+  customerId String
+  vendorId   String?
+  driverId   String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  customer   User       @relation("CustomerRooms", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor     Vendor?    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  driver     Driver?    @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  messages   Message[]
+
+  @@index([customerId, vendorId])
+  @@index([customerId, driverId])
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  chatRoomId String
+  senderId   String
+  message    String
+  timestamp  DateTime @default(now())
+
+  chatRoom   ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  sender     User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([chatRoomId, timestamp])
+}
+
+model OrderRide {
+  id          String      @id @default(cuid())
+  type        OrderType
+  status      OrderStatus @default(PENDING)
+  customerId  String
+  vendorId    String?
+  driverId    String?
+  metadata    Json?
+  createdAt   DateTime    @default(now())
+
+  customer    User        @relation("OrderInitiator", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor      Vendor?     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  driver      Driver?     @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
+  @@index([type, status])
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hyperlocal Chat</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <h1>Hyperlocal Chat Marketplace</h1>
+      <section id="auth" class="card">
+        <input id="phone" placeholder="Phone number" />
+        <button id="sendOtp">Send OTP</button>
+        <input id="otp" placeholder="OTP" />
+        <button id="verifyOtp">Verify OTP</button>
+      </section>
+
+      <section id="flow" class="card hidden">
+        <p>Type <strong>Hi</strong> to begin:</p>
+        <input id="messageInput" placeholder="Message" />
+        <button id="sendMsg">Send</button>
+        <div id="guidance"></div>
+      </section>
+
+      <section id="results" class="card hidden">
+        <h2>Nearby & previous</h2>
+        <ul id="list"></ul>
+      </section>
+
+      <section id="chat" class="card hidden">
+        <h2>Live Chat</h2>
+        <div id="feed"></div>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

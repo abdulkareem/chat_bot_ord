@@ -1,0 +1,7 @@
+{
+  "name": "frontend-pwa",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve src -l 4173"
+  }
+}

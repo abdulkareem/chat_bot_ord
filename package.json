@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "CI=1 wrangler deploy",
     "test": "node --test",
     "lint": "echo 'No linter configured'"
   },

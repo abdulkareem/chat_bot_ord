@@ -45,6 +45,15 @@ Implemented:
 6. Deploy:
    `npm run deploy`
 
+### Deployment stuck in "pending"
+
+If your pipeline stays pending for a long time, it is usually because Wrangler is waiting for interactive authentication.  
+The deploy script in this repo now runs with `CI=1` so Wrangler uses CI mode and fails fast instead of hanging indefinitely.
+
+For CI/CD, set these environment variables in your deployment platform:
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
 ## Scale Notes (100K users)
 - Edge APIs on Workers reduce latency.
 - Durable Object sharding by chat id avoids single-node bottlenecks.

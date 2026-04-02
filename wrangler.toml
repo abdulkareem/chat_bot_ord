@@ -15,11 +15,9 @@ tag = "v1"
 new_sqlite_classes = ["ChatRoomDO"]
 
 [vars]
-JWT_SECRET = "change-me"
 OTP_TEST_BYPASS = "000000"
 CHAT_MAX_FILE_BYTES = "2097152"
 CHAT_FILE_TTL_MS = "600000"
-DATABASE_URL="postgresql://postgres:emlBgYALMYtySJhHgaxBQEgwlOkmXssh@interchange.proxy.rlwy.net:16318/railway"
 [observability]
 enabled = false
 head_sampling_rate = 1

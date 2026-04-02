@@ -45,6 +45,60 @@ Implemented:
 6. Deploy:
    `npm run deploy`
 
+## Connect Cloudflare Worker to Railway Postgres
+
+Your Worker already reads the database URL from `env.DATABASE_URL` (`src/db/index.js`), so the main work is configuring secrets and Railway networking correctly.
+
+### 1) Get the correct Railway connection string
+- In Railway → your Postgres service → **Connect**.
+- Copy the **Public Networking** URL.
+- Ensure SSL is required by adding `?sslmode=require` when needed.
+
+Example format:
+`postgresql://postgres:<PASSWORD>@<HOST>:<PORT>/railway?sslmode=require`
+
+### 2) Set the secret in Cloudflare
+From your project root:
+
+```bash
+wrangler secret put DATABASE_URL
+```
+
+Paste the Railway URL when prompted.
+
+Also set your JWT secret if you have not already:
+
+```bash
+wrangler secret put JWT_SECRET
+```
+
+### 3) Keep secrets out of `wrangler.toml`
+- Do **not** commit raw credentials inside `[vars]`.
+- Keep non-sensitive config in `[vars]`, and credentials in `wrangler secret`.
+
+### 4) Initialize schema in Railway
+Run this from your local machine (or CI) against Railway:
+
+```bash
+DATABASE_URL="postgresql://...railway?sslmode=require" npm run db:init
+```
+
+### 5) Verify runtime configuration
+Local/dev:
+
+```bash
+npm run dev
+curl http://127.0.0.1:8787/test
+```
+
+Production:
+
+```bash
+curl https://vyntarochat.abdulkareem-t.workers.dev/test
+```
+
+If response includes missing `DATABASE_URL`, your secret is not set for that environment.
+
 ### Login/registration UI update
 - The root route `/` now opens the onboarding flow directly (instead of the old phone-role-OTP form).
 - If the old screen still appears, clear service worker cache once and reload (cache key upgraded to `vyntaro-pwa-v2`).

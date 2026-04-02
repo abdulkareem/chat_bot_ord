@@ -44,6 +44,19 @@ function normalizeRole(role) {
   return null;
 }
 
+function normalizeVehicleType(vehicleType) {
+  const value = String(vehicleType || '').trim().toUpperCase();
+  if (value === 'AUTO' || value === 'CAR') return value;
+  return null;
+}
+
+function normalizeVehicleCategory(vehicleCategory) {
+  if (vehicleCategory == null || String(vehicleCategory).trim() === '') return null;
+  const value = String(vehicleCategory).trim().toUpperCase();
+  if (value === 'MINI' || value === 'SEDAN' || value === 'SUV') return value;
+  return null;
+}
+
 function generateSixDigitOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
@@ -367,16 +380,131 @@ export async function registerDriver(req, env) {
   const sql = getDb(env);
   const scope = enforceApp(req, 'pwa');
   if (scope.error) return scope.error;
-  const { userId, driverName, vehicleNumber, rcOwner, phone, location, planType = 'monthly' } = await parse(req);
+  const {
+    userId,
+    driverName,
+    vehicleType,
+    vehicleCategory,
+    vehicleNumber,
+    licenseNumber,
+    rcOwner,
+    phone,
+    location,
+    planType = 'monthly'
+  } = await parse(req);
   if (!vehicleNumber || !rcOwner) return json({ error: 'vehicleNumber and rcOwner are required' }, 400);
+  const resolvedVehicleType = normalizeVehicleType(vehicleType || 'AUTO');
+  if (!resolvedVehicleType) return json({ error: 'vehicleType must be AUTO or CAR' }, 400);
+  const resolvedVehicleCategory = resolvedVehicleType === 'AUTO' ? null : normalizeVehicleCategory(vehicleCategory);
+  if (resolvedVehicleType === 'CAR' && vehicleCategory != null && !resolvedVehicleCategory) {
+    return json({ error: 'vehicleCategory must be MINI, SEDAN or SUV for car drivers' }, 400);
+  }
   const [user] = await sql`SELECT id FROM users WHERE app_id = ${APP_ID} AND id = ${userId}`;
   if (!user) return json({ error: 'user not found' }, 404);
 
   await sql`UPDATE users SET name = COALESCE(${driverName}, name), role = ${ROLES.AUTO_DRIVER}, phone = COALESCE(${normalizePhone(phone)}, phone), location_lat = COALESCE(${location?.lat ?? null}, location_lat), location_lng = COALESCE(${location?.lng ?? null}, location_lng), is_approved = false, verification_status = ${VERIFICATION_STATUS.PENDING} WHERE id = ${userId}`;
-  await sql`INSERT INTO drivers (app_id, user_id, vehicle_number, rc_owner, approval_status) VALUES (${APP_ID}, ${userId}, ${vehicleNumber}, ${rcOwner}, 'pending') ON CONFLICT (user_id) DO UPDATE SET vehicle_number = EXCLUDED.vehicle_number, rc_owner = EXCLUDED.rc_owner, approval_status = 'pending'`;
+  await sql`
+    INSERT INTO drivers (app_id, user_id, vehicle_type, vehicle_category, vehicle_number, license_number, rc_owner, approval_status, latitude, longitude, is_active)
+    VALUES (${APP_ID}, ${userId}, ${resolvedVehicleType}, ${resolvedVehicleCategory}, ${vehicleNumber}, ${licenseNumber || null}, ${rcOwner}, 'pending', ${location?.lat ?? null}, ${location?.lng ?? null}, true)
+    ON CONFLICT (user_id) DO UPDATE SET
+      vehicle_type = EXCLUDED.vehicle_type,
+      vehicle_category = EXCLUDED.vehicle_category,
+      vehicle_number = EXCLUDED.vehicle_number,
+      license_number = EXCLUDED.license_number,
+      rc_owner = EXCLUDED.rc_owner,
+      latitude = COALESCE(EXCLUDED.latitude, drivers.latitude),
+      longitude = COALESCE(EXCLUDED.longitude, drivers.longitude),
+      is_active = true,
+      approval_status = 'pending'
+  `;
   const [existingSub] = await sql`SELECT id FROM subscriptions WHERE app_id = ${APP_ID} AND user_id = ${userId} AND status = ${SUB_STATUS.ACTIVE} LIMIT 1`;
   if (!existingSub) await startFreeTrial(sql, userId, ROLES.AUTO_DRIVER);
   return json({ ok: true, approvalStatus: 'pending', selectedPlan: planType === 'yearly' ? 'yearly' : 'monthly', message: 'Free 1 month trial started. Please wait for super admin verification.' });
+}
+
+export async function nearbyDrivers(req, env) {
+  const sql = getDb(env);
+  const scope = enforceApp(req, 'pwa');
+  if (scope.error) return scope.error;
+  const url = new URL(req.url);
+  const lat = Number(url.searchParams.get('lat'));
+  const lng = Number(url.searchParams.get('lng'));
+  const vehicleType = normalizeVehicleType(url.searchParams.get('vehicleType'));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return json({ error: 'lat and lng are required' }, 400);
+
+  const rows = await sql`
+    SELECT
+      u.id AS user_id,
+      u.name,
+      u.phone,
+      d.vehicle_type,
+      d.vehicle_category,
+      d.vehicle_number,
+      d.latitude,
+      d.longitude,
+      (
+        6371 * acos(
+          cos(radians(${lat})) * cos(radians(COALESCE(d.latitude, u.location_lat, u.latitude))) *
+          cos(radians(COALESCE(d.longitude, u.location_lng, u.longitude)) - radians(${lng})) +
+          sin(radians(${lat})) * sin(radians(COALESCE(d.latitude, u.location_lat, u.latitude)))
+        )
+      ) AS distance_km,
+      CASE WHEN sub.status = ${SUB_STATUS.ACTIVE} THEN 1 ELSE 0 END AS plan_rank
+    FROM drivers d
+    JOIN users u ON u.id = d.user_id AND u.app_id = d.app_id
+    LEFT JOIN LATERAL (
+      SELECT status
+      FROM subscriptions s
+      WHERE s.app_id = d.app_id AND s.user_id = d.user_id
+      ORDER BY s.created_at DESC
+      LIMIT 1
+    ) sub ON true
+    WHERE d.app_id = ${APP_ID}
+      AND u.active = true
+      AND u.is_approved = true
+      AND u.verification_status = ${VERIFICATION_STATUS.APPROVED}
+      AND d.is_active = true
+      AND (${vehicleType || null}::text IS NULL OR d.vehicle_type = ${vehicleType || null})
+    ORDER BY plan_rank DESC, distance_km ASC
+    LIMIT 20
+  `;
+  return json({ items: rows });
+}
+
+export async function chatStart(req, env) {
+  const sql = getDb(env);
+  const scope = enforceApp(req, 'pwa');
+  if (scope.error) return scope.error;
+  const { userId, driverId, message = null } = await parse(req);
+  if (!userId || !driverId) return json({ error: 'userId and driverId are required' }, 400);
+  const userA = Number(userId) < Number(driverId) ? Number(userId) : Number(driverId);
+  const userB = Number(userId) < Number(driverId) ? Number(driverId) : Number(userId);
+  let [chat] = await sql`SELECT id, user_a, user_b FROM chats WHERE app_id = ${APP_ID} AND user_a = ${userA} AND user_b = ${userB} LIMIT 1`;
+  if (!chat) {
+    [chat] = await sql`INSERT INTO chats (app_id, user_a, user_b) VALUES (${APP_ID}, ${userA}, ${userB}) RETURNING id, user_a, user_b`;
+    await sql`INSERT INTO leads (app_id, user_id, driver_id, chat_id) VALUES (${APP_ID}, ${userId}, ${driverId}, ${chat.id}) ON CONFLICT (app_id, user_id, driver_id) DO NOTHING`;
+  }
+  if (message) {
+    await sql`INSERT INTO messages (app_id, chat_id, sender_id, message_type, content) VALUES (${APP_ID}, ${chat.id}, ${userId}, 'text', ${JSON.stringify({ text: String(message) })}::jsonb)`;
+  }
+  return json({ ok: true, chatId: chat.id });
+}
+
+export async function chatMessage(req, env) {
+  const sql = getDb(env);
+  const scope = enforceApp(req, 'pwa');
+  if (scope.error) return scope.error;
+  const { chatId, senderId, messageType = 'text', content } = await parse(req);
+  if (!chatId || !senderId || !content) return json({ error: 'chatId, senderId and content are required' }, 400);
+  const [chat] = await sql`SELECT id FROM chats WHERE app_id = ${APP_ID} AND id = ${chatId} LIMIT 1`;
+  if (!chat) return json({ error: 'chat not found' }, 404);
+  const [created] = await sql`
+    INSERT INTO messages (app_id, chat_id, sender_id, message_type, content)
+    VALUES (${APP_ID}, ${chatId}, ${senderId}, ${messageType}, ${JSON.stringify(content)}::jsonb)
+    RETURNING id, created_at
+  `;
+  await sql`UPDATE chats SET updated_at = NOW() WHERE app_id = ${APP_ID} AND id = ${chatId}`;
+  return json({ ok: true, message: created });
 }
 
 export async function registerShop(req, env) {
@@ -461,10 +589,7 @@ export const adminApproveOnboarding = adminApprove;
 export const subscriptionUpload = adminApprove;
 export const subscriptionVerify = adminApprove;
 export const subscriptionStatus = adminUsers;
-export const nearbyDrivers = adminUsers;
 export const nearbyShops = adminUsers;
-export const chatStart = adminUsers;
-export const chatMessage = adminUsers;
 export const analyticsById = adminUsers;
 export const adminChats = adminUsers;
 export const adminSubscriptions = adminUsers;
@@ -475,6 +600,8 @@ export const __test = {
   normalizeEmail,
   normalizePhone,
   normalizeRole,
+  normalizeVehicleType,
+  normalizeVehicleCategory,
   generateSixDigitOtp,
   sha256Hex,
   buildAdminOtpEmailPayload

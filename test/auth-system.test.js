@@ -6,6 +6,9 @@ test('normalizes email and role', () => {
   assert.equal(__test.normalizeEmail('  ABDULKAREEM@PSMOCOLLEGE.AC.IN '), 'abdulkareem@psmocollege.ac.in');
   assert.equal(__test.normalizeRole('shop owner'), 'SHOP_OWNER');
   assert.equal(__test.normalizeRole('driver'), 'AUTO_DRIVER');
+  assert.equal(__test.normalizeVehicleType('auto'), 'AUTO');
+  assert.equal(__test.normalizeVehicleType('car'), 'CAR');
+  assert.equal(__test.normalizeVehicleCategory('sedan'), 'SEDAN');
 });
 
 test('normalizes whatsapp number', () => {

@@ -1,5 +1,5 @@
 const API = localStorage.getItem('workerUrl') || 'http://localhost:8787';
-const WHATSAPP_VERIFY_NUMBER = '919744917623';
+const WHATSAPP_VERIFY_NUMBER = '+919744917623';
 let token = localStorage.getItem('token');
 let roomId = null;
 let socket = null;
@@ -66,8 +66,13 @@ $('verifyPhone').onclick = async () => {
     if (!res.ok) throw new Error('Failed to initiate WhatsApp verification');
 
     const message = encodeURIComponent('VYNTARO verify my number');
-    const waUrl = `https://wa.me/${WHATSAPP_VERIFY_NUMBER}?text=${message}`;
-    window.open(waUrl, '_blank');
+    const waDigits = WHATSAPP_VERIFY_NUMBER.replace(/[^\d]/g, '');
+    const nativeWaUrl = `whatsapp://send?phone=${waDigits}&text=${message}`;
+    const fallbackWaUrl = `https://wa.me/${waDigits}?text=${message}`;
+    window.location.href = nativeWaUrl;
+    setTimeout(() => {
+      if (document.visibilityState === 'visible') window.location.href = fallbackWaUrl;
+    }, 900);
     $('otpHint').textContent = 'After sending the WhatsApp message, wait for OTP and enter it here.';
     showSlide('otp');
   } catch {

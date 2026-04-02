@@ -38,12 +38,16 @@ Implemented:
    `wrangler secret put DATABASE_URL`
 3. Configure JWT secret:
    `wrangler secret put JWT_SECRET`
-4. Apply schema on DB:
-   `psql "$DATABASE_URL" -f src/db/schema.sql`
+4. Create/link database schema (safe to run multiple times):
+   `DATABASE_URL="postgres://..." npm run db:init`
 5. Run locally:
    `npm run dev`
 6. Deploy:
    `npm run deploy`
+
+### Login/registration UI update
+- The root route `/` now opens the onboarding flow directly (instead of the old phone-role-OTP form).
+- If the old screen still appears, clear service worker cache once and reload (cache key upgraded to `vyntaro-pwa-v2`).
 
 ### Deployment stuck in "pending"
 

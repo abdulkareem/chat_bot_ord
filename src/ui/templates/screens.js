@@ -1,21 +1,5 @@
 import { layout } from './layout.js';
 
-export const loginScreen = () => layout({
-  title: 'Vyntaro • Login',
-  body: `<section class="card"><h1>Vyntaro</h1><p>Install app and login as customer, auto driver, or shop owner.</p>
-  <form id="loginForm"><input name="phone" placeholder="Phone" required/><select name="role"><option value="CUSTOMER">Customer</option><option value="AUTO_DRIVER">Auto Driver</option><option value="SHOP_OWNER">Shop Owner</option></select><input name="otp" placeholder="OTP"/><button>Enter</button></form><pre id="out"></pre></section>`,
-  script: `
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js');
-  document.getElementById('loginForm').onsubmit = async (e)=>{
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const payload = Object.fromEntries(fd.entries());
-    const r = await fetch('/auth/login',{method:'POST',headers:{'content-type':'application/json','x-app-id':'vyntaro','x-client-channel':'pwa'},body:JSON.stringify(payload)});
-    document.getElementById('out').textContent = JSON.stringify(await r.json(),null,2);
-  }
-  `
-});
-
 export const homeScreen = () => layout({
   title: 'Vyntaro • Home',
   body: `<section><h2>Discover Nearby</h2><div class="grid"><a class="tile" href="/chat">Realtime Chat</a></div><div id="map" style="height:360px;border-radius:12px;margin-top:16px"></div></section>`,
@@ -73,14 +57,14 @@ export const chatScreen = () => layout({
 
 export const onboardingScreen = () => layout({
   title: 'Vyntaro • Onboarding',
-  body: `<section class="card"><h1>Vyntaro App Onboarding</h1><p id="statusText">Checking your device...</p>
+  body: `<section class="card"><h1>Welcome to Vyntaro</h1><p id="statusText">Start by entering your WhatsApp number and device ID to continue.</p>
     <div class="grid">
-      <input id="phone" placeholder="WhatsApp number" />
-      <input id="deviceId" placeholder="Device ID" />
-      <button id="checkUser">Check Device</button>
-      <button id="verifyBtn">Verify via WhatsApp</button>
+      <input id="phone" placeholder="WhatsApp number (with country code)" />
+      <input id="deviceId" placeholder="Device ID (auto-generated if left empty)" />
+      <button id="checkUser">Continue</button>
+      <button id="verifyBtn">Send WhatsApp OTP</button>
       <input id="otp" placeholder="Enter 6-digit OTP" style="display:none" />
-      <button id="submitOtp" style="display:none">Enter OTP</button>
+      <button id="submitOtp" style="display:none">Verify OTP</button>
     </div>
 
     <div id="roleCard" class="grid" style="display:none;margin-top:14px">
@@ -131,6 +115,10 @@ export const onboardingScreen = () => layout({
 
     document.getElementById('checkUser').onclick = async () => {
       const whatsappNumber = document.getElementById('phone').value.trim();
+      if (!whatsappNumber) {
+        setStatus('Please enter your WhatsApp number first.');
+        return;
+      }
       const deviceId = document.getElementById('deviceId').value.trim() || ('web-' + Math.random().toString(36).slice(2));
       const data = await post('/auth/whatsapp/initiate', { whatsappNumber, deviceId });
       print(data);
@@ -140,14 +128,14 @@ export const onboardingScreen = () => layout({
         location.href = '/home';
         return;
       }
-      setStatus('Device not registered. Tap Verify via WhatsApp.');
+      setStatus('Device is not registered yet. Tap "Send WhatsApp OTP" to verify.');
     };
 
     document.getElementById('verifyBtn').onclick = async () => {
-      const text = 'VYNTARO verofy my account';
+      const text = 'VYNTARO verify my account';
       const to = '9744917623';
       window.location.href = 'https://wa.me/' + to + '?text=' + encodeURIComponent(text);
-      setStatus('After sending WhatsApp message, enter OTP below (valid 5 minutes).');
+      setStatus('After sending the WhatsApp message, enter the OTP below (valid for 5 minutes).');
       show('otp', true);
       show('submitOtp', true);
       document.getElementById('verifyBtn').textContent = 'Waiting for OTP...';
@@ -157,6 +145,10 @@ export const onboardingScreen = () => layout({
       const whatsappNumber = document.getElementById('phone').value.trim();
       const deviceId = document.getElementById('deviceId').value.trim();
       const otp = document.getElementById('otp').value.trim();
+      if (!otp) {
+        setStatus('Please enter the OTP you received.');
+        return;
+      }
       const location = await getLocation();
       const data = await post('/auth/whatsapp/verify', { whatsappNumber, deviceId, otp, location });
       token = data.token;

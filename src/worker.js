@@ -2,7 +2,7 @@ import { ChatRoomDO } from './do/chat-room.js';
 import { allowRequest } from './core/rate-limit.js';
 import { html, json } from './core/response.js';
 import * as api from './api/handlers.js';
-import { loginScreen, homeScreen, chatScreen, onboardingScreen, adminDashboardScreen } from './ui/templates/screens.js';
+import { homeScreen, chatScreen, onboardingScreen, adminDashboardScreen } from './ui/templates/screens.js';
 import { getDb } from './db/index.js';
 import { expireSubscriptions } from './services/subscription.js';
 import { pushDailyInsight } from './cron/analytics.js';
@@ -37,7 +37,7 @@ export default {
       return json({ error: 'rate limit' }, 429);
     }
 
-    if (url.pathname === '/') return html(loginScreen());
+    if (url.pathname === '/') return html(onboardingScreen());
     if (url.pathname === '/home') return html(homeScreen());
     if (url.pathname === '/chat') return html(chatScreen());
     if (url.pathname === '/onboarding') return html(onboardingScreen());
@@ -56,7 +56,7 @@ export default {
       }), { headers: { 'content-type': 'application/manifest+json' } });
     }
     if (url.pathname === '/service-worker.js') {
-      return new Response(`const CACHE='vyntaro-pwa-v1';self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/','/onboarding','/home','/chat','/static/styles.css','/manifest.webmanifest'])))});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))) });self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).then(r=>{const c=r.clone();caches.open(CACHE).then(cache=>cache.put(e.request,c));return r;}).catch(()=>caches.match(e.request))) });`, { headers: { 'content-type': 'application/javascript; charset=utf-8' } });
+      return new Response(`const CACHE='vyntaro-pwa-v2';self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/','/onboarding','/home','/chat','/static/styles.css','/manifest.webmanifest'])))});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))) });self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).then(r=>{const c=r.clone();caches.open(CACHE).then(cache=>cache.put(e.request,c));return r;}).catch(()=>caches.match(e.request))) });`, { headers: { 'content-type': 'application/javascript; charset=utf-8' } });
     }
 
     if (url.pathname === '/test') {

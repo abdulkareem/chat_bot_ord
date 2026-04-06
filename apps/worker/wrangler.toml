@@ -13,3 +13,5 @@ new_sqlite_classes = ["ChatRoomDO"]
 [vars]
 BACKEND_URL = "http://localhost:3001"
 DEV_EXPOSE_OTP = "true"
+# apps/worker/wrangler.toml
+name = 'vyntarochat'

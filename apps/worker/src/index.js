@@ -20,7 +20,7 @@ function limit(key, perMinute = 60) {
 }
 
 async function verifyJwt(token, secret) {
-  const [h, p, s] = token.split('.');
+  const [h, p, s] = String(token || '').split('.');
   if (!h || !p || !s) return null;
 
   const enc = new TextEncoder();
@@ -32,12 +32,22 @@ async function verifyJwt(token, secret) {
 
 async function proxy(request, env, pathname) {
   const target = `${env.BACKEND_URL}${pathname}`;
+  const headers = new Headers(request.headers);
+  headers.set('x-worker-gateway', 'v1');
   const init = {
     method: request.method,
-    headers: request.headers,
+    headers,
     body: ['GET', 'HEAD'].includes(request.method) ? undefined : await request.text()
   };
   return fetch(target, init);
+}
+
+function makeCorsHeaders(origin = '*') {
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+    'access-control-allow-headers': 'authorization,content-type,x-device-id,x-app-id,x-client-channel'
+  };
 }
 
 export { ChatRoomDO };
@@ -47,32 +57,32 @@ export default {
     const url = new URL(request.url);
     const ip = request.headers.get('cf-connecting-ip') || 'anon';
 
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: makeCorsHeaders(request.headers.get('origin') || '*') });
     if (!limit(ip, 120)) return json({ error: 'rate_limited' }, 429);
 
-    if (url.pathname === '/health') return json({ ok: true, service: 'worker' });
+    if (url.pathname === '/health') return json({ ok: true, service: 'worker', backend: env.BACKEND_URL, time: new Date().toISOString() });
 
     if (url.pathname === '/auth/send-otp' && request.method === 'POST') {
       const { phone } = await request.json().catch(() => ({}));
       if (!phone) return json({ error: 'phone required' }, 400);
       const otp = String(Math.floor(100000 + Math.random() * 900000));
       otpBucket.set(phone, { otp, expires: Date.now() + 5 * 60 * 1000 });
-
-      if (env.RESEND_API_KEY) {
-        await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ from: 'otp@hyperlocal.app', to: [`${phone}@example.invalid`], subject: 'Your OTP', html: `<b>${otp}</b>` })
-        });
-      }
-
-      return json({ ok: true, ...(env.DEV_EXPOSE_OTP ? { otp } : {}) });
+      return json({ ok: true, ...(env.DEV_EXPOSE_OTP === 'true' ? { otp } : {}) });
     }
 
     if (url.pathname === '/auth/verify-otp' && request.method === 'POST') {
-      const { phone, otp } = await request.json().catch(() => ({}));
-      const row = otpBucket.get(phone);
-      if (!row || row.expires < Date.now() || row.otp !== otp) return json({ error: 'invalid otp' }, 401);
-      return proxy(request, env, '/auth/verify-otp');
+      const payload = await request.json().catch(() => ({}));
+      const row = otpBucket.get(payload.phone);
+      if (!row || row.expires < Date.now() || row.otp !== payload.otp) return json({ error: 'invalid otp' }, 401);
+      return proxy(new Request(request.url, { method: request.method, headers: request.headers, body: JSON.stringify(payload) }), env, '/auth/verify-otp');
+    }
+
+    if (url.pathname === '/chat/message' && request.method === 'POST') {
+      const token = request.headers.get('authorization')?.replace('Bearer ', '');
+      if (!token) return json({ error: 'missing token' }, 401);
+      const claims = await verifyJwt(token, env.JWT_SECRET);
+      if (!claims) return json({ error: 'invalid token' }, 401);
+      return proxy(request, env, '/chat/intent');
     }
 
     if (url.pathname.startsWith('/realtime/')) {
@@ -90,8 +100,15 @@ export default {
       return env.CHAT_ROOM_DO.get(doId).fetch(doUrl.toString(), request);
     }
 
-    const protectedRoutes = ['/user/register', '/vendors/nearby', '/drivers/nearby', '/chat/initiate', '/chat/save-message', '/order/create', '/history'];
-    if (protectedRoutes.some((p) => url.pathname.startsWith(p))) {
+    const publicRoutes = ['/auth/send-otp', '/auth/verify-otp', '/health'];
+    const protectedPrefixes = [
+      '/user/register', '/vendors/nearby', '/drivers/nearby', '/services/nearby', '/chat/initiate', '/chat/save-message', '/order/create', '/history',
+      '/onboarding/', '/admin/'
+    ];
+
+    if (publicRoutes.includes(url.pathname)) return proxy(request, env, url.pathname + url.search);
+
+    if (protectedPrefixes.some((p) => url.pathname.startsWith(p))) {
       const token = request.headers.get('authorization')?.replace('Bearer ', '');
       if (!token) return json({ error: 'missing token' }, 401);
       const claims = await verifyJwt(token, env.JWT_SECRET);

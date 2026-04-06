@@ -15,20 +15,21 @@ function validateRequiredEnv(env) {
 }
 
 const routes = [
-  ['POST', '/auth/admin/send-otp', api.adminSendOtp],
-  ['POST', '/auth/admin/verify-otp', api.adminVerifyOtp],
-  ['POST', '/auth/whatsapp/initiate', api.whatsappInitiate],
-  ['POST', '/auth/whatsapp/verify', api.whatsappVerify],
-  ['POST', '/register/user', api.registerUser],
-  ['POST', '/register/shop', api.registerShop],
-  ['POST', '/register/driver', api.registerDriver],
-  ['GET', '/nearby/drivers', api.nearbyDrivers],
-  ['POST', '/chat/start', api.chatStart],
-  ['POST', '/chat/message', api.chatMessage],
+  ['POST', '/auth/request-whatsapp', api.requestWhatsapp],
+  ['POST', '/auth/verify-otp', api.verifyOtp],
   ['POST', '/webhooks/whatsapp', api.whatsappWebhook],
-  ['POST', '/webhook', api.whatsappWebhook],
-  ['GET', '/admin/users', api.adminUsers],
-  ['POST', '/admin/approve', api.adminApprove]
+  ['POST', '/onboarding', api.onboarding],
+  ['GET', '/user/profile', api.userProfile],
+  ['POST', '/subscription/activate', api.subscriptionActivate],
+  ['POST', '/admin/onboarding/decision', api.onboardingDecision],
+  // backward compatibility
+  ['POST', '/auth/whatsapp/initiate', api.requestWhatsapp],
+  ['POST', '/auth/whatsapp/verify', api.verifyOtp],
+  ['POST', '/register/user', api.onboarding],
+  ['POST', '/register/shop', api.onboarding],
+  ['POST', '/register/driver', api.onboarding],
+  ['POST', '/admin/approve', api.onboardingDecision],
+  ['POST', '/webhook', api.whatsappWebhook]
 ];
 
 export { ChatRoomDO };

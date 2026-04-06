@@ -1,67 +1,45 @@
 import { json } from '../core/response.js';
 import { requireAuth, signToken } from '../core/auth.js';
 import { getDb } from '../db/index.js';
-import { APP_ID, ROLES, SUB_STATUS, VERIFICATION_STATUS } from '../types/constants.js';
-import { startFreeTrial } from '../services/subscription.js';
+import { redisDel, redisGet, redisSetEx } from '../core/redis.js';
+import { APP_ID, ONBOARDING_STATUS, PAID_ROLES, PLAN_TYPES, ROLES, SUB_STATUS } from '../types/constants.js';
+import { activateSubscription, calculatePlan } from '../services/subscription.js';
 
-const SUPER_ADMIN_EMAIL = 'abdulkareem@psmocollege.ac.in';
-const OTP_EXPIRY_MINUTES = 5;
-const OTP_RESEND_COOLDOWN_SECONDS = 45;
-const OTP_WINDOW_MINUTES = 10;
-const OTP_MAX_REQUESTS = 3;
-const WHATSAPP_VERIFY_TEXTS = [
-  'vyntaro verify my account',
-  'vyntaro verify my number',
-  'vytnaro verify my account',
-  'vytnaro verify my number',
-  'vyntaro',
-  'vyntaro verify my account.',
-  'vyntaro verify my number.',
-  'vytnaro verify my account.',
-  'vytnaro verify my number.',
-  'vyntaro.'
-];
+const OTP_EXPIRY_SECONDS = 300;
+const OTP_RATE_WINDOW_SECONDS = 600;
+const OTP_MAX_PER_WINDOW = 5;
+const VERIFY_PHONE = '+919744917623';
+const VERIFY_TEXT = 'VYNTARO verify my number';
 
-const sessionCache = new Map();
-
-function normalizeEmail(email) {
-  return String(email || '').trim().toLowerCase();
-}
-
-function normalizePhone(phone) {
-  const digits = String(phone || '').replace(/[^\d]/g, '');
+function normalizePhone(raw, countryCode = '+91') {
+  const digits = String(raw || '').replace(/\D/g, '');
   if (!digits) return '';
-  if (digits.length === 10) return `+91${digits}`;
-  return digits.startsWith('91') && digits.length === 12 ? `+${digits}` : `+${digits}`;
+  if (digits.length <= 10) return `${countryCode}${digits}`;
+  return digits.startsWith('91') ? `+${digits}` : `+${digits}`;
 }
 
-
-function isNonEmptyString(value) {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-function normalizeRole(role) {
-  const value = String(role || '').trim().toLowerCase();
-  if (value === 'customer') return ROLES.CUSTOMER;
-  if (value === 'auto driver' || value === 'auto_driver' || value === 'driver') return ROLES.AUTO_DRIVER;
-  if (value === 'shop owner' || value === 'shop_owner' || value === 'shop') return ROLES.SHOP_OWNER;
+function normalizeRole(raw) {
+  const value = String(raw || '').trim().toUpperCase();
+  if (value in ROLES) return ROLES[value];
   return null;
 }
 
-function normalizeVehicleType(vehicleType) {
-  const value = String(vehicleType || '').trim().toUpperCase();
-  if (value === 'AUTO' || value === 'CAR') return value;
-  return null;
+function parseCountryCode(req) {
+  const locale = req.headers.get('cf-ipcountry') || req.headers.get('x-locale-country') || 'IN';
+  if (locale === 'IN') return '+91';
+  if (locale === 'US') return '+1';
+  return '+91';
 }
 
-function normalizeVehicleCategory(vehicleCategory) {
-  if (vehicleCategory == null || String(vehicleCategory).trim() === '') return null;
-  const value = String(vehicleCategory).trim().toUpperCase();
-  if (value === 'MINI' || value === 'SEDAN' || value === 'SUV') return value;
-  return null;
+function parseDeviceId(req, body) {
+  const provided = String(body?.deviceId || '').trim();
+  if (provided) return provided;
+  const ua = req.headers.get('user-agent') || 'unknown';
+  const ip = req.headers.get('cf-connecting-ip') || 'unknown';
+  return `fp:${ip}:${ua}`.slice(0, 255);
 }
 
-function generateSixDigitOtp() {
+function sixDigitOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
@@ -71,587 +49,334 @@ async function sha256Hex(input) {
   return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function createOtpRecord(sql, { contact, channel, purpose }) {
-  const otp = generateSixDigitOtp();
-  const otpHash = await sha256Hex(otp);
-  const [row] = await sql`
-    INSERT INTO otp_verifications (app_id, contact, channel, purpose, otp_hash, expiry, is_verified)
-    VALUES (${APP_ID}, ${contact}, ${channel}, ${purpose}, ${otpHash}, NOW() + (${OTP_EXPIRY_MINUTES} * INTERVAL '1 minute'), false)
-    RETURNING id
-  `;
-  return { otp, otpHash, otpId: row?.id || null };
+function ensureApp(req, expectedChannel = null) {
+  if (req.headers.get('x-app-id') !== APP_ID) return json({ error: 'invalid app id' }, 403);
+  if (expectedChannel && req.headers.get('x-client-channel') !== expectedChannel) return json({ error: 'invalid channel' }, 403);
+  return null;
 }
 
-function enforceApp(req, channel) {
-  const appId = req.headers.get('x-app-id');
-  const clientChannel = req.headers.get('x-client-channel');
-  if (appId !== APP_ID) return { error: json({ error: 'invalid app_id' }, 403) };
-  if (channel && channel !== clientChannel) return { error: json({ error: `only ${channel} access allowed` }, 403) };
-  return {};
-}
+async function parse(req) { try { return await req.json(); } catch { return {}; } }
 
-async function parse(req) {
-  try {
-    return await req.json();
-  } catch {
-    return {};
-  }
-}
-
-function buildAdminOtpEmailPayload(to, otp) {
-  return {
-    from: 'noreply@aureliv.in',
-    to: [to],
-    subject: 'VYNTARO Admin OTP',
-    html: `<p>Your VYNTARO admin OTP is <b>${otp}</b>. It expires in ${OTP_EXPIRY_MINUTES} minutes.</p>`
-  };
-}
-
-async function sendResendEmail(env, to, otp) {
-  if (!env.RESEND_API_KEY) return { simulated: true, provider: 'resend', messageId: null };
-  const payload = buildAdminOtpEmailPayload(to, otp);
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Resend failed: ${body}`);
-  }
-  const data = await res.json().catch(() => ({}));
-  return { simulated: false, provider: 'resend', messageId: data?.id || null };
-}
-
-async function sendWhatsAppOtp(env, phone, otp) {
-  const apiUrl = env.WHATSAPP_API_URL || (env.API_BASE_URL ? `${String(env.API_BASE_URL).replace(/\/$/, '')}/api/messages/send` : null);
-  const apiKey = env.APP_API_KEY || env.WHATSAPP_API_TOKEN;
-  if (!apiUrl || !apiKey) return { simulated: true };
-  const normalized = String(phone || '').trim();
-  const digits = normalized.replace(/[^\d]/g, '');
-  const defaultCountryCode = String(env.WHATSAPP_COUNTRY_CODE || '').trim();
-  const countryCode = normalized.startsWith('+')
-    ? `+${digits.slice(0, Math.max(0, digits.length - 10))}`
-    : (defaultCountryCode || null);
-  const mobile = normalized.startsWith('+') && digits.length > 10 ? digits.slice(-10) : digits;
-  const res = await fetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'X-APP-KEY': apiKey,
-      APP_API_KEY: apiKey,
-      'X-API-KEY': apiKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      mobile,
-      ...(countryCode ? { countryCode } : {}),
-      message: `Your VYNTARO OTP is ${otp}. Expires in ${OTP_EXPIRY_MINUTES} minutes.`
-    })
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`WhatsApp send failed: ${body}`);
-  }
-  return { simulated: false };
-}
-
-function parseInboundWhatsapp(payload) {
-  const root = payload?.entry?.[0]?.changes?.[0]?.value || payload || {};
-  const message = root?.messages?.[0] || {};
-  const fullText = String(payload?.message || payload?.text?.body || message?.text?.body || '').trim();
-  const fromRaw = payload?.from || payload?.wa_id || payload?.phone || message?.from || '';
-  const from = normalizePhone(fromRaw);
-  const [first = '', ...rest] = fullText.split(/\s+/);
-  const keyword = first.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-  const command = rest.join(' ').trim();
-  return {
-    from,
-    fullText,
-    keyword,
-    command
-  };
-}
-
-function resolveDeviceId(req, providedDeviceId) {
-  if (providedDeviceId) return String(providedDeviceId).trim();
-  const ua = req.headers.get('user-agent') || 'unknown';
-  const ip = req.headers.get('cf-connecting-ip') || 'unknown';
-  return `auto-${ip}-${ua}`.slice(0, 180);
-}
-
-async function requireSuperAdmin(req, env) {
-  const scope = enforceApp(req, 'web');
-  if (scope.error) return scope;
-  const auth = await requireAuth(req, env);
-  if (!auth) return { error: json({ error: 'unauthorized' }, 401) };
-  if (auth.role !== ROLES.SUPER_ADMIN || normalizeEmail(auth.email) !== SUPER_ADMIN_EMAIL) {
-    return { error: json({ error: 'forbidden' }, 403) };
-  }
-  return { auth };
-}
-
-async function upsertUser(sql, payload) {
-  const {
-    name = null,
-    whatsappNumber,
-    role,
-    deviceId = null,
-    lat = null,
-    lng = null,
-    address = null,
-    isVerified = false,
-    verificationStatus = VERIFICATION_STATUS.PENDING,
-    isApproved = false
-  } = payload;
-  const [existing] = await sql`SELECT * FROM users WHERE app_id = ${APP_ID} AND phone = ${whatsappNumber} LIMIT 1`;
-  if (existing) {
-    const [updated] = await sql`
-      UPDATE users
-      SET name = COALESCE(${name}, name),
-          role = COALESCE(${role}, role),
-          device_id = COALESCE(${deviceId}, device_id),
-          location_lat = COALESCE(${lat}, location_lat),
-          location_lng = COALESCE(${lng}, location_lng),
-          latitude = COALESCE(${lat}, latitude),
-          longitude = COALESCE(${lng}, longitude),
-          is_verified = ${isVerified || existing.is_verified},
-          verification_status = COALESCE(${verificationStatus}, verification_status),
-          is_approved = ${isApproved || existing.is_approved}
-      WHERE id = ${existing.id} AND app_id = ${APP_ID}
-      RETURNING *
-    `;
-    if (address) {
-      await sql`UPDATE devices SET location = ${JSON.stringify({ lat, lng, address })} WHERE user_id = ${updated.id} AND app_id = ${APP_ID}`;
-    }
-    return updated;
-  }
-
-  const [created] = await sql`
-    INSERT INTO users (app_id, name, phone, role, device_id, is_verified, verification_status, is_approved, location_lat, location_lng, latitude, longitude)
-    VALUES (${APP_ID}, ${name}, ${whatsappNumber}, ${role || ROLES.CUSTOMER}, ${deviceId}, ${isVerified}, ${verificationStatus}, ${isApproved}, ${lat}, ${lng}, ${lat}, ${lng})
-    RETURNING *
-  `;
-  if (deviceId) {
-    await sql`INSERT INTO devices (app_id, user_id, device_id, last_login, location) VALUES (${APP_ID}, ${created.id}, ${deviceId}, NOW(), ${JSON.stringify({ lat, lng, address })})`;
-  }
-  return created;
-}
-
-async function createDeviceLog(sql, { userId, deviceId, location }) {
-  const [existing] = await sql`SELECT id FROM devices WHERE app_id = ${APP_ID} AND user_id = ${userId} AND device_id = ${deviceId} LIMIT 1`;
-  if (existing) {
-    await sql`UPDATE devices SET last_login = NOW(), location = ${JSON.stringify(location || {})} WHERE id = ${existing.id}`;
-    return;
-  }
-  await sql`INSERT INTO devices (app_id, user_id, device_id, last_login, location) VALUES (${APP_ID}, ${userId}, ${deviceId}, NOW(), ${JSON.stringify(location || {})})`;
-}
-
-export async function adminSendOtp(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'web');
-  if (scope.error) return scope.error;
-  const { email } = await parse(req);
-  const normalizedEmail = normalizeEmail(email);
-  if (!isNonEmptyString(normalizedEmail)) return json({ error: 'email is required' }, 400);
-  if (normalizedEmail !== SUPER_ADMIN_EMAIL) return json({ error: 'invalid admin email' }, 403);
-
-  const [recent] = await sql`
-    SELECT created_at FROM otp_verifications
-    WHERE app_id = ${APP_ID} AND contact = ${normalizedEmail} AND channel = 'email' AND purpose = 'admin_login'
-    ORDER BY created_at DESC LIMIT 1
-  `;
-  if (recent && Date.now() - new Date(recent.created_at).getTime() < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
-    return json({ error: 'otp recently sent, please wait' }, 429);
-  }
-
-  const { otp, otpId } = await createOtpRecord(sql, { contact: normalizedEmail, channel: 'email', purpose: 'admin_login' });
-  const delivery = await sendResendEmail(env, normalizedEmail, otp);
-  if (otpId) {
-    await sql`UPDATE otp_verifications SET provider = ${delivery.provider || null}, provider_message_id = ${delivery.messageId || null} WHERE id = ${otpId}`;
-  }
-  return json({ ok: true, expiresInSeconds: OTP_EXPIRY_MINUTES * 60, ...(env.DEV_EXPOSE_OTP ? { otp } : {}) });
-}
-
-export async function adminVerifyOtp(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'web');
-  if (scope.error) return scope.error;
-  const { email, otp } = await parse(req);
-  const normalizedEmail = normalizeEmail(email);
-  if (!isNonEmptyString(normalizedEmail) || !isNonEmptyString(String(otp || ''))) return json({ error: 'email and otp are required' }, 400);
-  const otpHash = await sha256Hex(String(otp || ''));
-  const [row] = await sql`
-    SELECT id, expiry FROM otp_verifications
-    WHERE app_id = ${APP_ID} AND contact = ${normalizedEmail} AND channel = 'email' AND purpose = 'admin_login' AND otp_hash = ${otpHash} AND is_verified = false
+async function currentSubscription(sql, userId) {
+  const [sub] = await sql`
+    SELECT * FROM subscriptions
+    WHERE app_id = ${APP_ID} AND user_id = ${userId}
     ORDER BY created_at DESC
     LIMIT 1
   `;
-  if (!row || new Date(row.expiry).getTime() < Date.now()) return json({ error: 'otp invalid/expired' }, 401);
-  await sql`UPDATE otp_verifications SET is_verified = true WHERE id = ${row.id}`;
-  const now = Math.floor(Date.now() / 1000);
-  const token = await signToken({ email: normalizedEmail, role: ROLES.SUPER_ADMIN, app_id: APP_ID, iat: now, exp: now + 3600 }, env.JWT_SECRET);
-  sessionCache.set(token, { role: ROLES.SUPER_ADMIN, email: normalizedEmail, exp: now + 3600 });
-  return json({ token, role: ROLES.SUPER_ADMIN });
+  return sub || null;
 }
 
-export async function whatsappInitiate(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const { whatsappNumber, deviceId: requestedDeviceId } = await parse(req);
-  const deviceId = resolveDeviceId(req, requestedDeviceId);
-  const number = normalizePhone(whatsappNumber);
-  if (!number || number.length < 8) return json({ error: 'invalid whatsapp number' }, 400);
+async function hasActiveSubscription(sql, user) {
+  if (!PAID_ROLES.has(user.role)) return true;
+  const sub = await currentSubscription(sql, user.id);
+  if (!sub) return false;
+  return sub.status === SUB_STATUS.ACTIVE && new Date(sub.end_date).getTime() > Date.now();
+}
 
-  const [byDevice] = await sql`SELECT id, role, is_verified, is_approved FROM users WHERE app_id = ${APP_ID} AND device_id = ${deviceId} LIMIT 1`;
-  if (byDevice?.is_verified) {
-    const token = await signToken({ sub: byDevice.id, role: byDevice.role, app_id: APP_ID }, env.JWT_SECRET);
-    return json({ ok: true, mode: 'device_login', token, user: byDevice });
+async function bindDevice(sql, userId, deviceId, location = null) {
+  await sql`
+    INSERT INTO devices (app_id, user_id, device_id, latitude, longitude, location, last_login)
+    VALUES (${APP_ID}, ${userId}, ${deviceId}, ${location?.lat ?? null}, ${location?.lng ?? null}, ${JSON.stringify(location || {})}, NOW())
+    ON CONFLICT (app_id, user_id, device_id)
+    DO UPDATE SET
+      latitude = EXCLUDED.latitude,
+      longitude = EXCLUDED.longitude,
+      location = EXCLUDED.location,
+      last_login = NOW()
+  `;
+}
+
+async function sendOtpViaProvider(env, phone, otp) {
+  if (!env.WHATSAPP_API_URL || !env.WHATSAPP_API_TOKEN) return { simulated: true };
+  const res = await fetch(env.WHATSAPP_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.WHATSAPP_API_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      to: phone,
+      message: `Your VYNTARO OTP is ${otp}. Valid for 5 minutes.`
+    })
+  });
+  if (!res.ok) throw new Error(`whatsapp provider error: ${res.status}`);
+  return { simulated: false };
+}
+
+export async function requestWhatsapp(req, env) {
+  const blocked = ensureApp(req, 'pwa');
+  if (blocked) return blocked;
+  const body = await parse(req);
+  const countryCode = parseCountryCode(req);
+  const phone = normalizePhone(body.phone, countryCode);
+  if (!phone || phone.length < 8) return json({ error: 'invalid phone' }, 400);
+  const deviceId = parseDeviceId(req, body);
+  const sql = getDb(env);
+
+  const [userByDevice] = await sql`SELECT u.* FROM users u JOIN devices d ON d.user_id = u.id AND d.app_id = u.app_id WHERE u.app_id = ${APP_ID} AND d.device_id = ${deviceId} ORDER BY d.last_login DESC LIMIT 1`;
+  if (userByDevice?.phone_verified) {
+    const token = await signToken({ sub: userByDevice.id, role: userByDevice.role, app_id: APP_ID }, env.JWT_SECRET);
+    await bindDevice(sql, userByDevice.id, deviceId, body.location || null);
+    return json({ ok: true, mode: 'device_login', token, user: userByDevice, next: '/chat' });
   }
 
-  const [user] = await sql`SELECT id, name, role, is_verified FROM users WHERE app_id = ${APP_ID} AND phone = ${number} LIMIT 1`;
-  await sql`INSERT INTO onboarding_sessions (app_id, contact, device_id, status) VALUES (${APP_ID}, ${number}, ${deviceId || null}, 'pending') ON CONFLICT (app_id, contact) DO UPDATE SET device_id = EXCLUDED.device_id, status = 'pending', updated_at = NOW()`;
+  await sql`
+    INSERT INTO onboarding_sessions (app_id, phone, device_id, country_code, status)
+    VALUES (${APP_ID}, ${phone}, ${deviceId}, ${countryCode}, 'pending')
+    ON CONFLICT (app_id, phone)
+    DO UPDATE SET device_id = EXCLUDED.device_id, country_code = EXCLUDED.country_code, status = 'pending', updated_at = NOW()
+  `;
+
   return json({
     ok: true,
-    exists: !!user,
-    requiresWhatsAppVerification: true,
-    next: 'send_whatsapp_verify_message',
-    instruction: 'Send "VYNTARO verify my number" from your WhatsApp to +919744917623 to continue.',
-    whatsappIntentText: 'VYNTARO verify my number',
-    verifyTo: '+919744917623'
+    countryCode,
+    phone,
+    verification: {
+      to: VERIFY_PHONE,
+      message: VERIFY_TEXT,
+      whatsappDeepLink: `whatsapp://send?phone=${VERIFY_PHONE.replace(/\D/g, '')}&text=${encodeURIComponent(VERIFY_TEXT)}`,
+      whatsappWebLink: `https://wa.me/${VERIFY_PHONE.replace(/\D/g, '')}?text=${encodeURIComponent(VERIFY_TEXT)}`
+    }
   });
 }
 
 export async function whatsappWebhook(req, env) {
-  const sql = getDb(env);
+  if (env.WHATSAPP_WEBHOOK_SECRET && req.headers.get('x-webhook-secret') !== env.WHATSAPP_WEBHOOK_SECRET) {
+    return json({ error: 'invalid webhook secret' }, 401);
+  }
+
   const payload = await parse(req);
-  const { from, fullText, keyword, command } = parseInboundWhatsapp(payload);
-  const body = fullText.toLowerCase();
-  if (!from || !keyword) return json({ ok: true, ignored: true });
-  const isVerifyCommand = keyword === 'VYNTARO' && (WHATSAPP_VERIFY_TEXTS.includes(body) || /verify my (account|number)/.test(command.toLowerCase()));
-  if (!isVerifyCommand) {
-    return json({ ok: true, ignored: true, keyword, command });
-  }
+  const from = normalizePhone(payload?.from || payload?.wa_id || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from);
+  const text = String(payload?.message || payload?.text?.body || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || '').trim().toLowerCase();
+  if (!from || !text.includes('vyntaro verify')) return json({ ok: true, ignored: true });
 
-  const [session] = await sql`
-    SELECT id FROM onboarding_sessions
-    WHERE app_id = ${APP_ID} AND contact = ${from} AND status = 'pending'
-    ORDER BY updated_at DESC
-    LIMIT 1
-  `;
-  if (!session) {
-    return json({ ok: true, ignored: true, reason: 'number_not_in_pending_onboarding' });
-  }
+  const sql = getDb(env);
+  const [session] = await sql`SELECT id FROM onboarding_sessions WHERE app_id = ${APP_ID} AND phone = ${from} AND status IN ('pending', 'otp_sent') LIMIT 1`;
+  if (!session) return json({ ok: true, ignored: true, reason: 'session_not_found' });
 
-  const [rate] = await sql`SELECT COUNT(*)::int AS count FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${from} AND channel = 'whatsapp' AND created_at >= NOW() - (${OTP_WINDOW_MINUTES} * INTERVAL '1 minute')`;
-  if (rate.count >= OTP_MAX_REQUESTS) return json({ error: 'too many otp requests' }, 429);
+  const rateKey = `otp-rate:${from}`;
+  const rate = await redisGet(env, rateKey) || { count: 0 };
+  if (rate.count >= OTP_MAX_PER_WINDOW) return json({ error: 'too many otp requests' }, 429);
+  await redisSetEx(env, rateKey, OTP_RATE_WINDOW_SECONDS, { count: rate.count + 1 });
 
-  const { otp } = await createOtpRecord(sql, { contact: from, channel: 'whatsapp', purpose: 'login' });
-  await sendWhatsAppOtp(env, from, otp);
-  await sql`
-    UPDATE onboarding_sessions
-    SET status = 'otp_sent', updated_at = NOW()
-    WHERE id = ${session.id}
-  `;
+  const otp = sixDigitOtp();
+  const otpHash = await sha256Hex(otp);
+  await redisSetEx(env, `otp:${from}`, OTP_EXPIRY_SECONDS, { otpHash, createdAt: Date.now() });
+  await sql`INSERT INTO otp_verifications (app_id, phone, otp_hash, expiry, channel, purpose, verified) VALUES (${APP_ID}, ${from}, ${otpHash}, NOW() + INTERVAL '5 minutes', 'whatsapp', 'login', false)`;
+  await sql`UPDATE onboarding_sessions SET status = 'otp_sent', updated_at = NOW() WHERE id = ${session.id}`;
+  await sendOtpViaProvider(env, from, otp);
+
   return json({ ok: true, ...(env.DEV_EXPOSE_OTP ? { otp } : {}) });
 }
 
-export async function whatsappVerify(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const { whatsappNumber, otp, deviceId: requestedDeviceId, location } = await parse(req);
-  const deviceId = resolveDeviceId(req, requestedDeviceId);
-  const number = normalizePhone(whatsappNumber);
-  if (!number || !isNonEmptyString(String(otp || ''))) return json({ error: 'whatsappNumber and otp are required' }, 400);
-  const otpHash = await sha256Hex(String(otp || ''));
-  const [row] = await sql`SELECT id, expiry FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${number} AND channel = 'whatsapp' AND purpose = 'login' AND otp_hash = ${otpHash} AND is_verified = false ORDER BY created_at DESC LIMIT 1`;
-  if (!row || new Date(row.expiry).getTime() < Date.now()) return json({ error: 'otp invalid/expired' }, 401);
+export async function verifyOtp(req, env) {
+  const blocked = ensureApp(req, 'pwa');
+  if (blocked) return blocked;
+  const body = await parse(req);
+  const phone = normalizePhone(body.phone, parseCountryCode(req));
+  const otp = String(body.otp || '').trim();
+  const deviceId = parseDeviceId(req, body);
+  if (!phone || !/^\d{6}$/.test(otp)) return json({ error: 'phone and valid otp required' }, 400);
 
-  await sql`DELETE FROM otp_verifications WHERE id = ${row.id}`;
-  await sql`DELETE FROM otp_verifications WHERE app_id = ${APP_ID} AND contact = ${number} AND channel = 'whatsapp' AND expiry < NOW()`;
-  const user = await upsertUser(sql, {
-    whatsappNumber: number,
-    deviceId,
-    lat: location?.lat ?? null,
-    lng: location?.lng ?? null,
-    address: location?.address ?? null,
-    isVerified: true
-  });
-  await createDeviceLog(sql, {
-    userId: user.id,
-    deviceId,
-    location
-  });
+  const cached = await redisGet(env, `otp:${phone}`);
+  const hash = await sha256Hex(otp);
+  if (!cached || cached.otpHash !== hash) return json({ error: 'invalid_or_expired_otp' }, 401);
+
+  const sql = getDb(env);
+  await redisDel(env, `otp:${phone}`);
+  await sql`UPDATE otp_verifications SET verified = true WHERE app_id = ${APP_ID} AND phone = ${phone} AND otp_hash = ${hash} AND verified = false`;
+
+  let [user] = await sql`SELECT * FROM users WHERE app_id = ${APP_ID} AND phone = ${phone} LIMIT 1`;
+  if (!user) {
+    [user] = await sql`INSERT INTO users (app_id, phone, role, phone_verified, onboarding_status) VALUES (${APP_ID}, ${phone}, ${ROLES.CUSTOMER}, true, ${ONBOARDING_STATUS.PENDING}) RETURNING *`;
+  } else {
+    [user] = await sql`UPDATE users SET phone_verified = true, updated_at = NOW() WHERE id = ${user.id} RETURNING *`;
+  }
+
+  await bindDevice(sql, user.id, deviceId, body.location || null);
 
   const token = await signToken({ sub: user.id, role: user.role, app_id: APP_ID }, env.JWT_SECRET);
-  return json({ ok: true, token, user, next: user.name ? 'home' : 'registration' });
+  return json({ ok: true, token, user, next: '/onboarding' });
 }
 
-export async function registerUser(req, env) {
+export async function onboarding(req, env) {
+  const blocked = ensureApp(req, 'pwa');
+  if (blocked) return blocked;
+  const auth = await requireAuth(req, env);
+  if (!auth?.sub) return json({ error: 'unauthorized' }, 401);
+  const body = await parse(req);
+
+  const role = normalizeRole(body.role);
+  if (!body.name || !role) return json({ error: 'name and valid role required' }, 400);
+  if (!body.acceptTerms || !body.acceptPrivacy) return json({ error: 'terms and privacy acceptance required' }, 400);
+
   const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const { name, whatsappNumber, role, consent } = await parse(req);
-  const resolvedRole = normalizeRole(role);
-  if (!name || !resolvedRole) return json({ error: 'name and valid role are required' }, 400);
-  if (resolvedRole === ROLES.CUSTOMER && !consent?.acceptedTerms) {
-    return json({ error: 'terms and legal consent are required for customer registration' }, 400);
-  }
-  const number = normalizePhone(whatsappNumber);
-  const [existing] = await sql`SELECT id FROM users WHERE app_id = ${APP_ID} AND phone = ${number}`;
-  if (existing) {
-    await sql`UPDATE users SET name = ${name}, role = ${resolvedRole} WHERE id = ${existing.id}`;
-    if (resolvedRole === ROLES.CUSTOMER) {
-      await sql`
-        INSERT INTO consents (app_id, user_id, accepted_terms, legal_name_usage, legal_number_usage, legal_location_usage, legal_chat_history_usage, timestamp)
-        VALUES (${APP_ID}, ${existing.id}, true, true, true, true, true, NOW())
-      `;
-    }
-    return json({ ok: true, userId: existing.id, role: resolvedRole });
-  }
-  const [created] = await sql`INSERT INTO users (app_id, name, phone, role, is_verified, verification_status, is_approved) VALUES (${APP_ID}, ${name}, ${number}, ${resolvedRole}, true, ${VERIFICATION_STATUS.PENDING}, ${resolvedRole === ROLES.CUSTOMER}) RETURNING id, role`;
-  if (resolvedRole === ROLES.CUSTOMER) {
+  const [user] = await sql`
+    UPDATE users
+    SET name = ${String(body.name).trim()}, role = ${role}, terms_accepted = true, privacy_accepted = true,
+        location_lat = COALESCE(${body.location?.lat ?? null}, location_lat),
+        location_lng = COALESCE(${body.location?.lng ?? null}, location_lng),
+        onboarding_status = ${role === ROLES.CUSTOMER ? ONBOARDING_STATUS.APPROVED : ONBOARDING_STATUS.PENDING},
+        updated_at = NOW()
+    WHERE app_id = ${APP_ID} AND id = ${auth.sub}
+    RETURNING *
+  `;
+
+  if (!user) return json({ error: 'user_not_found' }, 404);
+
+  if (role === ROLES.VENDOR) {
+    const profile = body.vendorProfile || {};
+    if (!profile.shopName || !profile.category || !body.location?.lat || !body.location?.lng) return json({ error: 'vendor profile incomplete' }, 400);
     await sql`
-      INSERT INTO consents (app_id, user_id, accepted_terms, legal_name_usage, legal_number_usage, legal_location_usage, legal_chat_history_usage, timestamp)
-      VALUES (${APP_ID}, ${created.id}, true, true, true, true, true, NOW())
+      INSERT INTO vendor_profiles (app_id, user_id, shop_name, category, contact_details, working_hours, address, latitude, longitude)
+      VALUES (${APP_ID}, ${user.id}, ${profile.shopName}, ${profile.category}, ${profile.contactDetails || null}, ${profile.workingHours || null}, ${profile.address || null}, ${body.location.lat}, ${body.location.lng})
+      ON CONFLICT (user_id) DO UPDATE SET
+        shop_name = EXCLUDED.shop_name,
+        category = EXCLUDED.category,
+        contact_details = EXCLUDED.contact_details,
+        working_hours = EXCLUDED.working_hours,
+        address = EXCLUDED.address,
+        latitude = EXCLUDED.latitude,
+        longitude = EXCLUDED.longitude,
+        updated_at = NOW()
     `;
   }
-  return json({ ok: true, userId: created.id, role: created.role });
-}
 
-export async function registerDriver(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const {
-    userId,
-    driverName,
-    vehicleType,
-    vehicleCategory,
-    vehicleNumber,
-    licenseNumber,
-    rcOwner,
-    phone,
-    location,
-    planType = 'monthly'
-  } = await parse(req);
-  if (!vehicleNumber || !rcOwner) return json({ error: 'vehicleNumber and rcOwner are required' }, 400);
-  const resolvedVehicleType = normalizeVehicleType(vehicleType || 'AUTO');
-  if (!resolvedVehicleType) return json({ error: 'vehicleType must be AUTO or CAR' }, 400);
-  const resolvedVehicleCategory = resolvedVehicleType === 'AUTO' ? null : normalizeVehicleCategory(vehicleCategory);
-  if (resolvedVehicleType === 'CAR' && vehicleCategory != null && !resolvedVehicleCategory) {
-    return json({ error: 'vehicleCategory must be MINI, SEDAN or SUV for car drivers' }, 400);
-  }
-  const [user] = await sql`SELECT id FROM users WHERE app_id = ${APP_ID} AND id = ${userId}`;
-  if (!user) return json({ error: 'user not found' }, 404);
-
-  await sql`UPDATE users SET name = COALESCE(${driverName}, name), role = ${ROLES.AUTO_DRIVER}, phone = COALESCE(${normalizePhone(phone)}, phone), location_lat = COALESCE(${location?.lat ?? null}, location_lat), location_lng = COALESCE(${location?.lng ?? null}, location_lng), is_approved = false, verification_status = ${VERIFICATION_STATUS.PENDING} WHERE id = ${userId}`;
-  await sql`
-    INSERT INTO drivers (app_id, user_id, vehicle_type, vehicle_category, vehicle_number, license_number, rc_owner, approval_status, latitude, longitude, is_active)
-    VALUES (${APP_ID}, ${userId}, ${resolvedVehicleType}, ${resolvedVehicleCategory}, ${vehicleNumber}, ${licenseNumber || null}, ${rcOwner}, 'pending', ${location?.lat ?? null}, ${location?.lng ?? null}, true)
-    ON CONFLICT (user_id) DO UPDATE SET
-      vehicle_type = EXCLUDED.vehicle_type,
-      vehicle_category = EXCLUDED.vehicle_category,
-      vehicle_number = EXCLUDED.vehicle_number,
-      license_number = EXCLUDED.license_number,
-      rc_owner = EXCLUDED.rc_owner,
-      latitude = COALESCE(EXCLUDED.latitude, drivers.latitude),
-      longitude = COALESCE(EXCLUDED.longitude, drivers.longitude),
-      is_active = true,
-      approval_status = 'pending'
-  `;
-  const [existingSub] = await sql`SELECT id FROM subscriptions WHERE app_id = ${APP_ID} AND user_id = ${userId} AND status = ${SUB_STATUS.ACTIVE} LIMIT 1`;
-  if (!existingSub) await startFreeTrial(sql, userId, ROLES.AUTO_DRIVER);
-  return json({ ok: true, approvalStatus: 'pending', selectedPlan: planType === 'yearly' ? 'yearly' : 'monthly', message: 'Free 1 month trial started. Please wait for super admin verification.' });
-}
-
-export async function nearbyDrivers(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const url = new URL(req.url);
-  const lat = Number(url.searchParams.get('lat'));
-  const lng = Number(url.searchParams.get('lng'));
-  const vehicleType = normalizeVehicleType(url.searchParams.get('vehicleType'));
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return json({ error: 'lat and lng are required' }, 400);
-
-  const rows = await sql`
-    SELECT
-      u.id AS user_id,
-      u.name,
-      u.phone,
-      d.vehicle_type,
-      d.vehicle_category,
-      d.vehicle_number,
-      d.latitude,
-      d.longitude,
-      (
-        6371 * acos(
-          cos(radians(${lat})) * cos(radians(COALESCE(d.latitude, u.location_lat, u.latitude))) *
-          cos(radians(COALESCE(d.longitude, u.location_lng, u.longitude)) - radians(${lng})) +
-          sin(radians(${lat})) * sin(radians(COALESCE(d.latitude, u.location_lat, u.latitude)))
-        )
-      ) AS distance_km,
-      CASE WHEN sub.status = ${SUB_STATUS.ACTIVE} THEN 1 ELSE 0 END AS plan_rank
-    FROM drivers d
-    JOIN users u ON u.id = d.user_id AND u.app_id = d.app_id
-    LEFT JOIN LATERAL (
-      SELECT status
-      FROM subscriptions s
-      WHERE s.app_id = d.app_id AND s.user_id = d.user_id
-      ORDER BY s.created_at DESC
-      LIMIT 1
-    ) sub ON true
-    WHERE d.app_id = ${APP_ID}
-      AND u.active = true
-      AND u.is_approved = true
-      AND u.verification_status = ${VERIFICATION_STATUS.APPROVED}
-      AND d.is_active = true
-      AND (${vehicleType || null}::text IS NULL OR d.vehicle_type = ${vehicleType || null})
-    ORDER BY plan_rank DESC, distance_km ASC
-    LIMIT 20
-  `;
-  return json({ items: rows });
-}
-
-export async function chatStart(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const { userId, driverId, message = null } = await parse(req);
-  if (!userId || !driverId) return json({ error: 'userId and driverId are required' }, 400);
-  const userA = Number(userId) < Number(driverId) ? Number(userId) : Number(driverId);
-  const userB = Number(userId) < Number(driverId) ? Number(driverId) : Number(userId);
-  let [chat] = await sql`SELECT id, user_a, user_b FROM chats WHERE app_id = ${APP_ID} AND user_a = ${userA} AND user_b = ${userB} LIMIT 1`;
-  if (!chat) {
-    [chat] = await sql`INSERT INTO chats (app_id, user_a, user_b) VALUES (${APP_ID}, ${userA}, ${userB}) RETURNING id, user_a, user_b`;
-    await sql`INSERT INTO leads (app_id, user_id, driver_id, chat_id) VALUES (${APP_ID}, ${userId}, ${driverId}, ${chat.id}) ON CONFLICT (app_id, user_id, driver_id) DO NOTHING`;
-  }
-  if (message) {
-    await sql`INSERT INTO messages (app_id, chat_id, sender_id, message_type, content) VALUES (${APP_ID}, ${chat.id}, ${userId}, 'text', ${JSON.stringify({ text: String(message) })}::jsonb)`;
-  }
-  return json({ ok: true, chatId: chat.id });
-}
-
-export async function chatMessage(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const { chatId, senderId, messageType = 'text', content } = await parse(req);
-  if (!chatId || !senderId || !content) return json({ error: 'chatId, senderId and content are required' }, 400);
-  const [chat] = await sql`SELECT id FROM chats WHERE app_id = ${APP_ID} AND id = ${chatId} LIMIT 1`;
-  if (!chat) return json({ error: 'chat not found' }, 404);
-  const [created] = await sql`
-    INSERT INTO messages (app_id, chat_id, sender_id, message_type, content)
-    VALUES (${APP_ID}, ${chatId}, ${senderId}, ${messageType}, ${JSON.stringify(content)}::jsonb)
-    RETURNING id, created_at
-  `;
-  await sql`UPDATE chats SET updated_at = NOW() WHERE app_id = ${APP_ID} AND id = ${chatId}`;
-  return json({ ok: true, message: created });
-}
-
-export async function registerShop(req, env) {
-  const sql = getDb(env);
-  const scope = enforceApp(req, 'pwa');
-  if (scope.error) return scope.error;
-  const { userId, shopName, ownerName, shopAddress, category, phone, location, planType = 'monthly' } = await parse(req);
-  if (!shopName || !shopAddress || !category) return json({ error: 'shopName, category and shopAddress are required' }, 400);
-
-  await sql`UPDATE users SET name = COALESCE(${ownerName}, name), role = ${ROLES.SHOP_OWNER}, phone = COALESCE(${normalizePhone(phone)}, phone), location_lat = COALESCE(${location?.lat ?? null}, location_lat), location_lng = COALESCE(${location?.lng ?? null}, location_lng), is_approved = false, verification_status = ${VERIFICATION_STATUS.PENDING} WHERE id = ${userId} AND app_id = ${APP_ID}`;
-  await sql`INSERT INTO shops (app_id, user_id, shop_name, category, address, lat, lng, approval_status) VALUES (${APP_ID}, ${userId}, ${shopName}, ${category}, ${shopAddress}, ${location?.lat ?? null}, ${location?.lng ?? null}, 'pending') ON CONFLICT (user_id) DO UPDATE SET shop_name = EXCLUDED.shop_name, category = EXCLUDED.category, address = EXCLUDED.address, lat = EXCLUDED.lat, lng = EXCLUDED.lng, approval_status = 'pending'`;
-  const [existingSub] = await sql`SELECT id FROM subscriptions WHERE app_id = ${APP_ID} AND user_id = ${userId} AND status = ${SUB_STATUS.ACTIVE} LIMIT 1`;
-  if (!existingSub) await startFreeTrial(sql, userId, ROLES.SHOP_OWNER);
-  return json({ ok: true, approvalStatus: 'pending', selectedPlan: planType === 'yearly' ? 'yearly' : 'monthly', message: 'Free 1 month trial started. Please wait for super admin verification.' });
-}
-
-export async function adminUsers(req, env) {
-  const sql = getDb(env);
-  const guard = await requireSuperAdmin(req, env);
-  if (guard.error) return guard.error;
-  const users = await sql`
-    SELECT u.id, u.name, u.phone AS whatsapp_number, u.role, u.is_verified, u.is_approved, u.verification_status, u.device_id, u.location_lat, u.location_lng,
-           d.approval_status AS driver_approval, s.approval_status AS shop_approval,
-           sub.plan_type, sub.start_date, sub.end_date, sub.status AS subscription_status
-    FROM users u
-    LEFT JOIN drivers d ON d.user_id = u.id AND d.app_id = u.app_id
-    LEFT JOIN shops s ON s.user_id = u.id AND s.app_id = u.app_id
-    LEFT JOIN LATERAL (
-      SELECT plan_type, start_date, end_date, status
-      FROM subscriptions ss
-      WHERE ss.user_id = u.id AND ss.app_id = u.app_id
-      ORDER BY created_at DESC LIMIT 1
-    ) sub ON true
-    WHERE u.app_id = ${APP_ID}
-    ORDER BY u.created_at DESC
-    LIMIT 500
-  `;
-
-  const deviceLogs = await sql`SELECT user_id, device_id, last_login, location FROM devices WHERE app_id = ${APP_ID} ORDER BY last_login DESC LIMIT 500`;
-  return json({ items: users, deviceLogs });
-}
-
-export async function adminApprove(req, env) {
-  const sql = getDb(env);
-  const guard = await requireSuperAdmin(req, env);
-  if (guard.error) return guard.error;
-
-  const { userId, approve = true, trial = false, planType = null } = await parse(req);
-  const [user] = await sql`SELECT id, role FROM users WHERE app_id = ${APP_ID} AND id = ${userId}`;
-  if (!user) return json({ error: 'user not found' }, 404);
-
-  await sql`UPDATE users SET is_approved = ${!!approve}, verification_status = ${approve ? VERIFICATION_STATUS.APPROVED : VERIFICATION_STATUS.REJECTED} WHERE id = ${user.id}`;
-  if (user.role === ROLES.AUTO_DRIVER) {
-    await sql`UPDATE drivers SET approval_status = ${approve ? 'approved' : 'rejected'} WHERE user_id = ${user.id} AND app_id = ${APP_ID}`;
-  }
-  if (user.role === ROLES.SHOP_OWNER) {
-    await sql`UPDATE shops SET approval_status = ${approve ? 'approved' : 'rejected'} WHERE user_id = ${user.id} AND app_id = ${APP_ID}`;
+  if (role === ROLES.DRIVER) {
+    const profile = body.driverProfile || {};
+    if (!profile.vehicleType || !profile.licenseDetails || !profile.availability) return json({ error: 'driver profile incomplete' }, 400);
+    await sql`
+      INSERT INTO driver_profiles (app_id, user_id, vehicle_type, license_details, availability)
+      VALUES (${APP_ID}, ${user.id}, ${profile.vehicleType}, ${profile.licenseDetails}, ${profile.availability})
+      ON CONFLICT (user_id) DO UPDATE SET
+        vehicle_type = EXCLUDED.vehicle_type,
+        license_details = EXCLUDED.license_details,
+        availability = EXCLUDED.availability,
+        updated_at = NOW()
+    `;
   }
 
-  if (approve && (trial || planType)) {
-    const selectedPlan = trial ? 'monthly' : (planType === 'yearly' ? 'yearly' : 'monthly');
-    const start = new Date();
-    const expiry = new Date(start);
-    expiry.setMonth(expiry.getMonth() + (selectedPlan === 'yearly' ? 12 : 1));
-    await sql`INSERT INTO subscriptions (app_id, user_id, role, plan_type, amount, gst, total_amount, start_date, end_date, status, verified) VALUES (${APP_ID}, ${user.id}, ${user.role}, ${selectedPlan}, 0, 0, 0, ${start.toISOString()}, ${expiry.toISOString()}, ${SUB_STATUS.ACTIVE}, true)`;
+  if (role === ROLES.SERVICE_PROVIDER) {
+    const profile = body.serviceProfile || {};
+    if (!profile.serviceType || !profile.serviceArea) return json({ error: 'service profile incomplete' }, 400);
+    await sql`
+      INSERT INTO service_profiles (app_id, user_id, service_type, service_area, experience_years)
+      VALUES (${APP_ID}, ${user.id}, ${profile.serviceType}, ${profile.serviceArea}, ${Number(profile.experienceYears || 0) || null})
+      ON CONFLICT (user_id) DO UPDATE SET
+        service_type = EXCLUDED.service_type,
+        service_area = EXCLUDED.service_area,
+        experience_years = EXCLUDED.experience_years,
+        updated_at = NOW()
+    `;
   }
 
-  return json({ ok: true });
+  return json({
+    ok: true,
+    onboardingStatus: user.onboarding_status,
+    requiresSubscription: PAID_ROLES.has(role),
+    next: '/chat'
+  });
 }
 
-// Backward compatible legacy handlers
-export const login = whatsappVerify;
-export const onboardingRequestOtp = whatsappInitiate;
-export const onboardingVerifyOtp = whatsappVerify;
-export const onboardingVerify = registerUser;
-export const onboardingRole = registerUser;
-export const onboardingLocation = registerUser;
-export const onboardingConsent = registerUser;
-export const onboardingSubscription = registerUser;
-export const onboardingStatus = whatsappInitiate;
-export const adminApproveOnboarding = adminApprove;
-export const subscriptionUpload = adminApprove;
-export const subscriptionVerify = adminApprove;
-export const subscriptionStatus = adminUsers;
-export const nearbyShops = adminUsers;
-export const analyticsById = adminUsers;
-export const adminChats = adminUsers;
-export const adminSubscriptions = adminUsers;
-export const adminAnalytics = adminUsers;
+async function verifyRazorpaySignature(orderId, paymentId, signature, secret) {
+  if (!secret) return true;
+  const data = `${orderId}|${paymentId}`;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
+  const hex = Array.from(new Uint8Array(signed)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return hex === signature;
+}
+
+export async function subscriptionActivate(req, env) {
+  const blocked = ensureApp(req, 'pwa');
+  if (blocked) return blocked;
+  const auth = await requireAuth(req, env);
+  if (!auth?.sub) return json({ error: 'unauthorized' }, 401);
+  const body = await parse(req);
+  const planType = body.planType === PLAN_TYPES.YEARLY ? PLAN_TYPES.YEARLY : PLAN_TYPES.MONTHLY;
+
+  const sql = getDb(env);
+  const [user] = await sql`SELECT * FROM users WHERE app_id = ${APP_ID} AND id = ${auth.sub} LIMIT 1`;
+  if (!user) return json({ error: 'user_not_found' }, 404);
+  if (!PAID_ROLES.has(user.role)) return json({ ok: true, message: 'customer plan is always free' });
+
+  const plan = calculatePlan(user.role, planType);
+
+  if (!body.razorpayPaymentId || !body.razorpayOrderId || !body.razorpaySignature) {
+    return json({
+      ok: true,
+      mode: 'create_order',
+      amountPaise: Math.round(plan.totalAmount * 100),
+      currency: plan.currency,
+      planType,
+      launchOfferApplied: plan.totalAmount === 69 || plan.totalAmount === 699
+    });
+  }
+
+  const validSig = await verifyRazorpaySignature(body.razorpayOrderId, body.razorpayPaymentId, body.razorpaySignature, env.RAZORPAY_KEY_SECRET);
+  if (!validSig) return json({ error: 'invalid_payment_signature' }, 401);
+
+  const subscription = await activateSubscription(sql, {
+    userId: user.id,
+    role: user.role,
+    planType,
+    razorpayOrderId: body.razorpayOrderId,
+    razorpayPaymentId: body.razorpayPaymentId,
+    razorpaySignature: body.razorpaySignature,
+    status: SUB_STATUS.ACTIVE
+  });
+
+  return json({ ok: true, subscription });
+}
+
+export async function userProfile(req, env) {
+  const blocked = ensureApp(req, 'pwa');
+  if (blocked) return blocked;
+  const auth = await requireAuth(req, env);
+  if (!auth?.sub) return json({ error: 'unauthorized' }, 401);
+  const sql = getDb(env);
+  const [user] = await sql`SELECT * FROM users WHERE app_id = ${APP_ID} AND id = ${auth.sub}`;
+  if (!user) return json({ error: 'user_not_found' }, 404);
+  const subscription = await currentSubscription(sql, user.id);
+
+  const visibleForLeads = user.onboarding_status === ONBOARDING_STATUS.APPROVED && await hasActiveSubscription(sql, user);
+  return json({ user, subscription, visibleForLeads });
+}
+
+export async function onboardingDecision(req, env) {
+  const blocked = ensureApp(req, 'web');
+  if (blocked) return blocked;
+  const auth = await requireAuth(req, env);
+  if (!auth || auth.role !== ROLES.SUPER_ADMIN) return json({ error: 'forbidden' }, 403);
+  const body = await parse(req);
+  const sql = getDb(env);
+
+  const next = body.approved ? ONBOARDING_STATUS.APPROVED : ONBOARDING_STATUS.REJECTED;
+  const [user] = await sql`UPDATE users SET onboarding_status = ${next}, updated_at = NOW() WHERE app_id = ${APP_ID} AND id = ${body.userId} RETURNING *`;
+  if (!user) return json({ error: 'user_not_found' }, 404);
+  return json({ ok: true, userId: user.id, onboardingStatus: user.onboarding_status });
+}
+
+// compatibility exports
+export const whatsappInitiate = requestWhatsapp;
+export const whatsappVerify = verifyOtp;
+export const registerUser = onboarding;
+export const registerShop = onboarding;
+export const registerDriver = onboarding;
+export const adminApprove = onboardingDecision;
+export const adminUsers = userProfile;
+export const nearbyDrivers = userProfile;
+export const chatStart = userProfile;
+export const chatMessage = userProfile;
+export const adminSendOtp = requestWhatsapp;
+export const adminVerifyOtp = verifyOtp;
+
+export const __test = { normalizePhone, normalizeRole, sha256Hex, sixDigitOtp };
 
 
-export const __test = {
-  normalizeEmail,
-  normalizePhone,
-  normalizeRole,
-  normalizeVehicleType,
-  normalizeVehicleCategory,
-  generateSixDigitOtp,
-  sha256Hex,
-  buildAdminOtpEmailPayload,
-  parseInboundWhatsapp
-};
+export const analyticsById = userProfile;
+export const nearbyShops = userProfile;
+export const adminChats = userProfile;
+export const adminSubscriptions = userProfile;
+export const adminAnalytics = userProfile;

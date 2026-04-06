@@ -1,20 +1,44 @@
-import { APP_ID, PLAN_CONFIG, SUB_STATUS } from '../types/constants.js';
+import { APP_ID, PLAN_TYPES, SUB_STATUS, PAID_ROLES, planPricing } from '../types/constants.js';
 
-export function calculatePlan(role, planType) {
-  const plan = PLAN_CONFIG[role]?.[planType];
-  if (!plan) throw new Error('Unsupported role/plan');
-  const gst = Number((plan.amount * plan.gstRate).toFixed(2));
-  return { amount: plan.amount, gst, totalAmount: Number((plan.amount + gst).toFixed(2)) };
+export function calculatePlan(role, planType, now = new Date()) {
+  if (!PAID_ROLES.has(role)) return { amount: 0, currency: 'INR', totalAmount: 0, billingMonths: 0 };
+  if (!Object.values(PLAN_TYPES).includes(planType)) throw new Error('Unsupported plan type');
+  const pricing = planPricing(planType, now);
+  if (!pricing) throw new Error('Missing pricing');
+  return {
+    amount: pricing.amountInr,
+    currency: pricing.currency,
+    totalAmount: pricing.amountInr,
+    billingMonths: planType === PLAN_TYPES.YEARLY ? 12 : 1
+  };
 }
 
-export async function startFreeTrial(sql, userId, role) {
-  const now = new Date();
+export async function activateSubscription(sql, {
+  userId,
+  role,
+  planType,
+  razorpayPaymentId = null,
+  razorpayOrderId = null,
+  razorpaySignature = null,
+  status = SUB_STATUS.ACTIVE,
+  now = new Date()
+}) {
+  const plan = calculatePlan(role, planType, now);
   const end = new Date(now);
-  end.setMonth(end.getMonth() + 1);
-  await sql`
-    INSERT INTO subscriptions (app_id, user_id, role, plan_type, amount, gst, total_amount, start_date, end_date, status, verified)
-    VALUES (${APP_ID}, ${userId}, ${role}, 'monthly', 0, 0, 0, ${now.toISOString()}, ${end.toISOString()}, ${SUB_STATUS.ACTIVE}, true)
+  end.setMonth(end.getMonth() + plan.billingMonths);
+
+  const [created] = await sql`
+    INSERT INTO subscriptions (
+      app_id, user_id, role, plan_type, amount, total_amount, currency,
+      start_date, end_date, status,
+      razorpay_payment_id, razorpay_order_id, razorpay_signature
+    ) VALUES (
+      ${APP_ID}, ${userId}, ${role}, ${planType}, ${plan.amount}, ${plan.totalAmount}, ${plan.currency},
+      ${now.toISOString()}, ${end.toISOString()}, ${status},
+      ${razorpayPaymentId}, ${razorpayOrderId}, ${razorpaySignature}
+    ) RETURNING *
   `;
+  return created;
 }
 
 export async function expireSubscriptions(sql) {
@@ -23,19 +47,6 @@ export async function expireSubscriptions(sql) {
     SET status = ${SUB_STATUS.EXPIRED}
     WHERE app_id = ${APP_ID}
       AND end_date < NOW()
-  `;
-
-  await sql`
-    UPDATE users u
-    SET subscription_expired = true,
-        active = false
-    WHERE u.app_id = ${APP_ID}
-      AND EXISTS (
-        SELECT 1
-        FROM subscriptions s
-        WHERE s.user_id = u.id
-          AND s.app_id = ${APP_ID}
-          AND s.status = ${SUB_STATUS.EXPIRED}
-      )
+      AND status = ${SUB_STATUS.ACTIVE}
   `;
 }

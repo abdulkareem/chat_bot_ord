@@ -1,57 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { __test } from '../src/api/handlers.js';
+import { isLaunchOfferActive, planPricing } from '../src/types/constants.js';
 
-test('normalizes email and role', () => {
-  assert.equal(__test.normalizeEmail('  ABDULKAREEM@PSMOCOLLEGE.AC.IN '), 'abdulkareem@psmocollege.ac.in');
-  assert.equal(__test.normalizeRole('shop owner'), 'SHOP_OWNER');
-  assert.equal(__test.normalizeRole('driver'), 'AUTO_DRIVER');
-  assert.equal(__test.normalizeVehicleType('auto'), 'AUTO');
-  assert.equal(__test.normalizeVehicleType('car'), 'CAR');
-  assert.equal(__test.normalizeVehicleCategory('sedan'), 'SEDAN');
+test('normalizes role variants', () => {
+  assert.equal(__test.normalizeRole('vendor'), 'VENDOR');
+  assert.equal(__test.normalizeRole('DRIVER'), 'DRIVER');
+  assert.equal(__test.normalizeRole('service_provider'), null);
 });
 
-test('normalizes whatsapp number', () => {
-  assert.equal(__test.normalizePhone(' +91 98765-43210 '), '+919876543210');
+test('normalizes phone number', () => {
+  assert.equal(__test.normalizePhone('98765-43210', '+91'), '+919876543210');
 });
 
-test('otp hashing is deterministic and secure format', async () => {
-  const otp = '123456';
-  const hashA = await __test.sha256Hex(otp);
-  const hashB = await __test.sha256Hex(otp);
+test('otp hash is deterministic', async () => {
+  const hashA = await __test.sha256Hex('123456');
+  const hashB = await __test.sha256Hex('123456');
   assert.equal(hashA, hashB);
   assert.equal(hashA.length, 64);
-  assert.notEqual(hashA, otp);
 });
 
 test('generated otp is 6 digits', () => {
-  const otp = __test.generateSixDigitOtp();
-  assert.match(otp, /^\d{6}$/);
+  assert.match(__test.sixDigitOtp(), /^\d{6}$/);
 });
 
-
-test('builds resend email payload using aureliv domain', () => {
-  const payload = __test.buildAdminOtpEmailPayload('abdulkareem@psmocollege.ac.in', '654321');
-  assert.equal(payload.from, 'noreply@aureliv.in');
-  assert.deepEqual(payload.to, ['abdulkareem@psmocollege.ac.in']);
-  assert.match(payload.html, /654321/);
-});
-
-test('parses meta inbound webhook into keyword and command', () => {
-  const parsed = __test.parseInboundWhatsapp({
-    entry: [{
-      changes: [{
-        value: {
-          messages: [{
-            from: '12025550199',
-            text: { body: 'order create shipment 7781' }
-          }]
-        }
-      }]
-    }]
-  });
-  assert.equal(parsed.from, '+12025550199');
-  assert.equal(parsed.keyword, 'ORDER');
-  assert.equal(parsed.command, 'create shipment 7781');
-  assert.equal(parsed.fullText, 'order create shipment 7781');
+test('launch pricing is applied before May 31 2026', () => {
+  const now = new Date('2026-05-20T00:00:00.000Z');
+  assert.equal(isLaunchOfferActive(now), true);
+  assert.equal(planPricing('monthly', now).amountInr, 69);
+  assert.equal(planPricing('yearly', now).amountInr, 699);
 });

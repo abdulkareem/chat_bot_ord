@@ -67,6 +67,37 @@ enum LeadStatus {
   CLOSED
 }
 
+enum SubscriptionType {
+  FREE
+  BASIC
+  PREMIUM
+}
+
+enum VendorStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum WalletTxnType {
+  CREDIT
+  DEBIT
+}
+
+enum LeadEventType {
+  SEARCH
+  VENDOR_CLICK
+  CHAT_STARTED
+  ORDER_INTENT
+}
+
 model User {
   id             String   @id @default(cuid())
   name           String?
@@ -92,21 +123,36 @@ model User {
 }
 
 model Vendor {
-  id          String         @id @default(cuid())
-  userId      String         @unique
-  category    VendorCategory
-  isPaid      Boolean        @default(false)
-  paidBoost   Int            @default(0)
-  rating      Float          @default(0)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id                 String            @id @default(cuid())
+  userId             String            @unique
+  category           VendorCategory
+  status             VendorStatus      @default(ACTIVE)
+  latitude           Float
+  longitude          Float
+  isPaid             Boolean           @default(false)
+  paidBoost          Int               @default(0)
+  rating             Float             @default(0)
+  avgResponseSeconds Int               @default(120)
+  subscriptionType   SubscriptionType  @default(FREE)
+  subscriptionExpiry DateTime?
+  priorityScore      Int               @default(0)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
-  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  chatRooms   ChatRoom[]
-  orders      OrderRide[]
-  leads       Lead[]
+  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatRooms          ChatRoom[]
+  orders             OrderRide[]
+  leads              Lead[]
+  promotions         VendorPromotion[]
+  invoices           VendorSubscriptionInvoice[]
+  paymentTxns        PaymentTransaction[]
+  wallet             VendorWallet?
+  walletLedger       WalletLedger[]
+  leadEvents         LeadEvent[]
 
-  @@index([isPaid, paidBoost, rating])
+  @@index([latitude, longitude])
+  @@index([category, status])
+  @@index([status, subscriptionType, priorityScore])
 }
 
 model Driver {
@@ -159,25 +205,41 @@ model OnboardingApplication {
 }
 
 model Lead {
-  id             String      @id @default(cuid())
+  id             String        @id @default(cuid())
   customerId     String
   intent         LeadIntent
   query          String
-  status         LeadStatus  @default(OPEN)
+  status         LeadStatus    @default(OPEN)
   vendorId       String?
   driverId       String?
   serviceAgentId String?
   metadata       Json?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
-  customer       User        @relation("LeadCustomer", fields: [customerId], references: [id], onDelete: Cascade)
-  vendor         Vendor?     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-  driver         Driver?     @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  customer       User          @relation("LeadCustomer", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor         Vendor?       @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  driver         Driver?       @relation(fields: [driverId], references: [id], onDelete: SetNull)
   serviceAgent   ServiceAgent? @relation(fields: [serviceAgentId], references: [id], onDelete: SetNull)
+  events         LeadEvent[]
 
   @@index([customerId, createdAt])
   @@index([intent, status, createdAt])
+}
+
+model LeadEvent {
+  id         String        @id @default(cuid())
+  leadId     String
+  vendorId   String?
+  eventType  LeadEventType
+  metadata   Json?
+  createdAt  DateTime      @default(now())
+
+  lead       Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  vendor     Vendor?       @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([leadId, eventType, createdAt])
+  @@index([vendorId, createdAt])
 }
 
 model ChatRoom {
@@ -211,22 +273,112 @@ model Message {
 }
 
 model OrderRide {
-  id             String       @id @default(cuid())
+  id             String        @id @default(cuid())
   type           OrderType
-  status         OrderStatus  @default(PENDING)
+  status         OrderStatus   @default(PENDING)
   customerId     String
   vendorId       String?
   driverId       String?
   serviceAgentId String?
   leadId         String?
   metadata       Json?
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime      @default(now())
 
-  customer       User         @relation("OrderInitiator", fields: [customerId], references: [id], onDelete: Cascade)
-  vendor         Vendor?      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  driver         Driver?      @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  customer       User          @relation("OrderInitiator", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor         Vendor?       @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  driver         Driver?       @relation(fields: [driverId], references: [id], onDelete: Cascade)
   serviceAgent   ServiceAgent? @relation(fields: [serviceAgentId], references: [id], onDelete: Cascade)
 
   @@index([customerId, createdAt])
   @@index([type, status])
+}
+
+model VendorPromotion {
+  id           String   @id @default(cuid())
+  vendorId     String
+  boostPoints  Int
+  startsAt     DateTime
+  endsAt       DateTime
+  isActive     Boolean  @default(true)
+  paymentTxnId String?
+  createdAt    DateTime @default(now())
+
+  vendor       Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId, isActive, startsAt, endsAt])
+}
+
+model VendorSubscriptionInvoice {
+  id               String           @id @default(cuid())
+  vendorId         String
+  subscriptionType SubscriptionType
+  startsAt         DateTime
+  endsAt           DateTime
+  amount           Float
+  paymentTxnId     String?
+  status           PaymentStatus    @default(PENDING)
+  createdAt        DateTime         @default(now())
+
+  vendor           Vendor           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId, createdAt])
+}
+
+model PaymentTransaction {
+  id          String        @id @default(cuid())
+  vendorId    String?
+  amount      Float
+  currency    String        @default("INR")
+  provider    String
+  providerRef String
+  status      PaymentStatus @default(PENDING)
+  metadata    Json?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  vendor      Vendor?       @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([vendorId, status, createdAt])
+  @@index([providerRef])
+}
+
+model VendorWallet {
+  id           String   @id @default(cuid())
+  vendorId      String   @unique
+  balance       Float    @default(0)
+  totalCredited Float    @default(0)
+  totalDebited  Float    @default(0)
+  updatedAt     DateTime @updatedAt
+
+  vendor        Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+}
+
+model WalletLedger {
+  id          String        @id @default(cuid())
+  vendorId    String
+  amount      Float
+  type        WalletTxnType
+  reason      String
+  referenceId String?
+  createdAt   DateTime      @default(now())
+
+  vendor      Vendor        @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId, createdAt])
+}
+
+model AnalyticsMetric {
+  id             String   @id @default(cuid())
+  metricDate     DateTime
+  category       String
+  searches       Int      @default(0)
+  chatsStarted   Int      @default(0)
+  leadsQualified Int      @default(0)
+  ordersCreated  Int      @default(0)
+  conversionRate Float    @default(0)
+  revenue        Float    @default(0)
+  createdAt      DateTime @default(now())
+
+  @@index([metricDate, category])
+  @@index([createdAt])
 }

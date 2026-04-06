@@ -2,7 +2,7 @@
 
 ## Production architecture
 
-`PWA (frontend) -> Cloudflare Worker (API gateway + chat orchestration + rate limit) -> Railway Backend (business APIs) -> PostgreSQL (Prisma)`
+`PWA (frontend) -> Cloudflare Worker (API gateway + chat orchestration + rate limit) -> Railway Backend (stateless business APIs) -> PostgreSQL + Redis + BullMQ workers`
 
 ## Apps
 
@@ -17,6 +17,8 @@
 
 - `DATABASE_URL`
 - `JWT_SECRET`
+- `REDIS_URL` (required for cache, distributed rate limits, queue)
+- `ENABLE_BACKGROUND_WORKERS` (`true/false`, optional)
 - `PORT` (optional)
 - `DEV_OTP` (optional for local dev)
 
@@ -43,20 +45,18 @@
 
 - `POST /chat/message` (worker chat orchestration route)
 - `GET /vendors/nearby`
-- `GET /drivers/nearby`
-- `GET /services/nearby`
+- `POST /leads/:id/events`
 - `POST /chat/initiate`
 - `POST /chat/save-message`
 
-### Onboarding + admin
+### Monetization + billing
 
-- `POST /onboarding/vendor`
-- `POST /onboarding/driver`
-- `POST /onboarding/service`
-- `GET /onboarding/my`
-- `GET /admin/onboarding`
-- `POST /admin/onboarding/:id/review`
-- `GET /admin/leads`
+- `POST /vendors/:id/subscription`
+- `POST /vendors/:id/boost`
+
+### Analytics
+
+- `GET /analytics/summary`
 
 ### Leads + orders
 
@@ -102,3 +102,7 @@ wrangler secret put BACKEND_URL
 ### Frontend
 
 Deploy static app and point it to Worker URL only.
+
+## Reference design
+
+Detailed scale + monetization blueprint: `docs/scaling-monetization-blueprint.md`.

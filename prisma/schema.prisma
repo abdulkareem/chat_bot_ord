@@ -9,166 +9,144 @@ datasource db {
 
 enum Role {
   SUPER_ADMIN
-  ADMIN
   CUSTOMER
   VENDOR
   DRIVER
+  SERVICE_PROVIDER
+}
+
+enum OnboardingStatus {
+  pending
+  approved
+  rejected
 }
 
 enum SubscriptionPlan {
-  FREE
-  BASIC
-  PRO
-  PREMIUM
+  monthly
+  yearly
 }
 
-enum ChatType {
-  USER_TO_VENDOR
-  USER_TO_DRIVER
-}
-
-enum MessageType {
-  TEXT
-  IMAGE
-  LOCATION
+enum SubscriptionStatus {
+  pending
+  active
+  expired
+  failed
+  cancelled
 }
 
 model User {
-  id    String  @id @default(uuid())
-  name  String?
-  phone String  @unique
-  email String? @unique
+  id               String           @id @default(uuid())
+  phone            String           @unique
+  name             String?
+  role             Role             @default(CUSTOMER)
+  phoneVerified    Boolean          @default(false)
+  termsAccepted    Boolean          @default(false)
+  privacyAccepted  Boolean          @default(false)
+  onboardingStatus OnboardingStatus @default(pending)
+  active           Boolean          @default(true)
+  locationLat      Float?
+  locationLng      Float?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
-  role Role
+  devices       Device[]
+  subscriptions Subscription[]
+  otps          OTP[]
 
-  isActive  Boolean @default(true)
-  isDeleted Boolean @default(false)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Profiles
-  vendorProfile Vendor?
-  driverProfile Driver?
-
-  // Chat relations
-  sentMessages     Message[] @relation("Sender")
-  receivedMessages Message[] @relation("Receiver")
-  chatsAsUser      Chat[]    @relation("UserChats")
-
-  // Leads
-  leads Lead[]
-
-  // Admin tracking
-  createdByAdminId String?
-  createdByAdmin   User?  @relation("AdminCreatedUsers", fields: [createdByAdminId], references: [id])
-
-  adminsCreated User[] @relation("AdminCreatedUsers")
+  vendorProfile  VendorProfile?
+  driverProfile  DriverProfile?
+  serviceProfile ServiceProfile?
 }
 
-model Vendor {
-  id     String @id @default(uuid())
-  userId String @unique
-
-  businessName String
-  category     String
-  description  String?
-
-  address   String?
+model Device {
+  id        String   @id @default(uuid())
+  userId    String
+  deviceId  String
   latitude  Float?
   longitude Float?
-
-  isActive   Boolean @default(true)
-  isApproved Boolean @default(false)
-  isDeleted  Boolean @default(false)
-
-  subscription SubscriptionPlan @default(FREE)
-
+  location  Json?
+  lastLogin DateTime @default(now())
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  chats Chat[]
-  leads Lead[]
-
-  @@index([latitude, longitude])
+  @@unique([userId, deviceId])
 }
 
-model Driver {
-  id     String @id @default(uuid())
-  userId String @unique
-
-  vehicleType   String
-  vehicleNumber String?
-  licenseNumber String?
-
-  latitude  Float?
-  longitude Float?
-
-  isActive   Boolean @default(true)
-  isApproved Boolean @default(false)
-  isDeleted  Boolean @default(false)
-
-  subscription SubscriptionPlan @default(FREE)
-
+model OTP {
+  id        String   @id @default(uuid())
+  userId    String?
+  phone     String
+  otpHash   String
+  channel   String   @default("whatsapp")
+  purpose   String   @default("login")
+  expiresAt DateTime
+  verified  Boolean  @default(false)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id])
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  chats Chat[]
-  leads Lead[]
-
-  @@index([latitude, longitude])
+  @@index([phone, createdAt])
 }
 
-model Chat {
-  id String @id @default(uuid())
+model Subscription {
+  id                String             @id @default(uuid())
+  userId            String
+  role              Role
+  planType          SubscriptionPlan
+  status            SubscriptionStatus @default(pending)
+  amount            Decimal            @db.Decimal(10, 2)
+  totalAmount       Decimal            @db.Decimal(10, 2)
+  currency          String             @default("INR")
+  startDate         DateTime
+  endDate           DateTime
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  razorpaySignature String?
+  metadata          Json?
+  createdAt         DateTime           @default(now())
 
-  userId   String
-  vendorId String?
-  driverId String?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  type ChatType
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  user   User    @relation("UserChats", fields: [userId], references: [id])
-  vendor Vendor? @relation(fields: [vendorId], references: [id])
-  driver Driver? @relation(fields: [driverId], references: [id])
-
-  messages Message[]
+  @@index([userId, status, endDate])
 }
 
-model Message {
-  id String @id @default(uuid())
+model VendorProfile {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  shopName       String
+  category       String
+  contactDetails String?
+  workingHours   String?
+  address        String?
+  latitude       Float?
+  longitude      Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  chatId     String
-  senderId   String
-  receiverId String
-
-  content String?
-  type    MessageType @default(TEXT)
-
-  createdAt DateTime @default(now())
-
-  chat     Chat @relation(fields: [chatId], references: [id])
-  sender   User @relation("Sender", fields: [senderId], references: [id])
-  receiver User @relation("Receiver", fields: [receiverId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model Lead {
-  id String @id @default(uuid())
+model DriverProfile {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  vehicleType    String
+  licenseDetails String?
+  availability   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  userId   String
-  vendorId String?
-  driverId String?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
 
-  createdAt DateTime @default(now())
+model ServiceProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  serviceType     String
+  serviceArea     String
+  experienceYears Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  user   User    @relation(fields: [userId], references: [id])
-  vendor Vendor? @relation(fields: [vendorId], references: [id])
-  driver Driver? @relation(fields: [driverId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

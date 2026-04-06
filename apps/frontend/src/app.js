@@ -73,6 +73,23 @@ function detectCountryCodeFromLocale() {
   return COUNTRY_DIAL_CODE_MAP[country] || '+1';
 }
 
+function openWhatsAppVerification() {
+  const message = encodeURIComponent('VYNTARO verify my number');
+  const waDigits = WHATSAPP_VERIFY_NUMBER.replace(/[^\d]/g, '');
+  const deepLink = `whatsapp://send?phone=${waDigits}&text=${message}`;
+  const webLink = `https://wa.me/${waDigits}?text=${message}`;
+  const browserLink = `https://api.whatsapp.com/send?phone=${waDigits}&text=${message}`;
+
+  const opened = window.open(deepLink, '_blank', 'noopener,noreferrer');
+  if (opened) return true;
+
+  const openedWeb = window.open(webLink, '_blank', 'noopener,noreferrer');
+  if (openedWeb) return true;
+
+  window.location.assign(browserLink);
+  return false;
+}
+
 function getCurrentPosition() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -129,14 +146,21 @@ $('verifyPhone').onclick = async () => {
     });
     if (!res.ok) throw new Error('Failed to initiate WhatsApp verification');
 
-    const message = encodeURIComponent('VYNTARO verify my number');
-    const waDigits = WHATSAPP_VERIFY_NUMBER.replace(/[^\d]/g, '');
-    window.location.assign(`https://wa.me/${waDigits}?text=${message}`);
-    $('otpHint').textContent = 'After sending the WhatsApp message, wait for OTP and enter it here.';
     showSlide('otp');
+    const opened = openWhatsAppVerification();
+    $('otpHint').textContent = opened
+      ? 'After sending the WhatsApp message, wait for OTP and enter it here.'
+      : 'WhatsApp did not open automatically. Tap "Open WhatsApp" below, send the message, then enter OTP.';
   } catch {
     $('phoneHint').textContent = 'Could not start WhatsApp verification. Please retry.';
   }
+};
+
+$('openWhatsapp').onclick = () => {
+  const opened = openWhatsAppVerification();
+  $('otpHint').textContent = opened
+    ? 'WhatsApp opened. Send the verify message and enter OTP here.'
+    : 'Unable to auto-open WhatsApp. Open WhatsApp manually and message the verify number.';
 };
 
 $('verifyOtp').onclick = async () => {

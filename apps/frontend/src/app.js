@@ -11,7 +11,8 @@ let userLocation = null;
 
 const onboardingState = {
   deviceId: getOrCreateDeviceId(),
-  profile: {}
+  profile: {},
+  conversationMemory: []
 };
 
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,33 @@ function getOrCreateDeviceId() {
   const id = crypto?.randomUUID?.() || `device-${Date.now()}`;
   localStorage.setItem('deviceId', id);
   return id;
+}
+
+function addFeedLine(text) {
+  const p = document.createElement('p');
+  p.textContent = text;
+  $('feed').appendChild(p);
+}
+
+function renderQuickReplies(replies = []) {
+  const guidance = $('guidance');
+  guidance.innerHTML = '';
+  if (!replies.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'row-buttons';
+
+  for (const reply of replies) {
+    const b = document.createElement('button');
+    b.className = 'secondary';
+    b.textContent = reply;
+    b.onclick = () => {
+      $('messageInput').value = reply;
+      $('sendMsg').click();
+    };
+    wrap.appendChild(b);
+  }
+
+  guidance.appendChild(wrap);
 }
 
 const COUNTRY_DIAL_CODE_MAP = {
@@ -70,7 +98,7 @@ async function detectCountryCode() {
       if (country && COUNTRY_DIAL_CODE_MAP[country]) return COUNTRY_DIAL_CODE_MAP[country];
     }
   } catch {
-    // Fallback to locale-based detection.
+    // fallback to locale
   }
 
   return detectCountryCodeFromLocale();
@@ -103,22 +131,7 @@ $('verifyPhone').onclick = async () => {
 
     const message = encodeURIComponent('VYNTARO verify my number');
     const waDigits = WHATSAPP_VERIFY_NUMBER.replace(/[^\d]/g, '');
-    const nativeWaUrl = `whatsapp://send?phone=${waDigits}&text=${message}`;
-    const androidIntentUrl = `intent://send?phone=${waDigits}&text=${message}#Intent;scheme=whatsapp;package=com.whatsapp;end`;
-    const fallbackWaUrl = `https://wa.me/${waDigits}?text=${message}`;
-
-    window.location.assign(nativeWaUrl);
-    setTimeout(() => {
-      if (document.visibilityState === 'visible') {
-        window.location.assign(androidIntentUrl);
-      }
-    }, 900);
-    setTimeout(() => {
-      if (document.visibilityState === 'visible') {
-        window.location.assign(fallbackWaUrl);
-      }
-    }, 1700);
-
+    window.location.assign(`https://wa.me/${waDigits}?text=${message}`);
     $('otpHint').textContent = 'After sending the WhatsApp message, wait for OTP and enter it here.';
     showSlide('otp');
   } catch {
@@ -166,11 +179,7 @@ $('driverYes').onclick = () => {
 $('driverNo').onclick = () => showSlide('roleShop');
 $('shopYes').onclick = async () => {
   userRole = 'VENDOR';
-  await completeRegistration({
-    name: 'Shop Owner',
-    role: 'VENDOR',
-    vendor: { category: 'GROCERY', isPaid: false, rating: 0 }
-  });
+  await submitOnboarding('vendor', { category: 'GROCERY', isPaid: false });
   showSlide('pending');
 };
 $('shopNo').onclick = () => {
@@ -199,17 +208,14 @@ $('completeCustomer').onclick = async () => {
   if (!name) return alert('Please enter your name');
   if (!$('agreement').checked) return alert('Please accept agreement to continue');
 
-  onboardingState.profile = { ...onboardingState.profile, name, role: 'CUSTOMER', location: userLocation };
   await completeRegistration({ name, role: 'CUSTOMER', lastLocation: userLocation });
   showSlide('chatBox');
+  renderQuickReplies(['Shop groceries', 'Book auto', 'Find plumber']);
 };
 
 $('autoYes').onclick = () => {
   selectedVehicleType = 'AUTO';
   showSlide('driverDetails');
-};
-$('autoNo').onclick = () => {
-  selectedVehicleType = null;
 };
 $('taxiYes').onclick = () => {
   selectedVehicleType = 'TAXI';
@@ -222,25 +228,6 @@ $('taxiNo').onclick = () => {
 
 $('toSubscription').onclick = () => {
   if (!selectedVehicleType) return alert('Please pick Auto or Taxi to continue.');
-  const driverName = $('driverName').value.trim();
-  const vehicleNumber = $('vehicleNumber').value.trim();
-  const licenseNumber = $('licenseNumber').value.trim();
-  const ownerName = $('ownerName').value.trim();
-
-  if (!driverName || !vehicleNumber || !licenseNumber || !ownerName) {
-    return alert('Please fill all driver/vehicle fields.');
-  }
-
-  onboardingState.profile = {
-    ...onboardingState.profile,
-    role: 'DRIVER',
-    driverName,
-    vehicleNumber,
-    licenseNumber,
-    ownerName,
-    vehicleType: selectedVehicleType
-  };
-
   showSlide('subscription');
 };
 
@@ -255,77 +242,66 @@ document.querySelectorAll('.plan').forEach((button) => {
 $('completeDriver').onclick = async () => {
   if (!selectedPlan) return alert('Please select monthly or yearly subscription.');
 
-  await completeRegistration({
-    name: onboardingState.profile.driverName,
-    role: 'DRIVER',
-    lastLocation: userLocation,
-    driver: {
-      vehicleType: selectedVehicleType,
-      isAvailable: true
-    }
+  await submitOnboarding('driver', {
+    vehicleType: selectedVehicleType,
+    plan: selectedPlan
   });
   showSlide('pending');
 };
 
 async function completeRegistration(payload) {
-  localStorage.setItem('onboardingData', JSON.stringify({
-    ...onboardingState,
-    userRole,
-    selectedPlan,
-    submittedAt: new Date().toISOString()
-  }));
-
   if (!token) return;
-  try {
-    await fetch(`${API}/user/register`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${token}`,
-        'x-device-id': onboardingState.deviceId
-      },
-      body: JSON.stringify(payload)
-    });
-  } catch {
-    // keep onboarding locally even if backend registration fails
-  }
+  await fetch(`${API}/user/register`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`,
+      'x-device-id': onboardingState.deviceId
+    },
+    body: JSON.stringify(payload)
+  }).catch(() => {});
+}
+
+async function submitOnboarding(type, payload) {
+  if (!token) return;
+  await fetch(`${API}/onboarding/${type}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload)
+  }).catch(() => {});
 }
 
 $('sendMsg').onclick = async () => {
   const text = $('messageInput').value.trim();
-  if (!text) return;
+  if (!text || !token) return;
 
-  if (text.toLowerCase() === 'hi') {
-    $('guidance').textContent = 'How can I help you? Options: Shop / Auto / Taxi';
+  onboardingState.conversationMemory.push({ role: 'user', message: text, at: new Date().toISOString() });
+  addFeedLine(`You: ${text}`);
+
+  const res = await fetch(`${API}/chat/message`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ message: text, lat: userLocation?.lat, lng: userLocation?.lng })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    addFeedLine('Bot: Sorry, I could not process that.');
     return;
   }
 
-  if (/shop/i.test(text)) {
-    const res = await fetch(`${API}/vendors/nearby?category=GROCERY&lat=12.97&lng=77.59`, {
-      headers: { authorization: `Bearer ${token}` }
-    });
-    const data = await res.json();
-    renderList(data.vendors || [], 'vendor');
-    return;
-  }
-
-  if (/auto|taxi/i.test(text)) {
-    const type = /taxi/i.test(text) ? 'TAXI' : 'AUTO';
-    const res = await fetch(`${API}/drivers/nearby?type=${type}&lat=12.97&lng=77.59`, {
-      headers: { authorization: `Bearer ${token}` }
-    });
-    const data = await res.json();
-    renderList(data.drivers || [], 'driver');
-  }
+  renderQuickReplies(data.quickReplies || []);
+  renderList(data.results || []);
+  addFeedLine(`Bot: Intent ${data.intent || 'UNKNOWN'} detected. ${data.results?.length || 0} nearby options found.`);
 };
 
-function renderList(items, kind) {
+function renderList(items) {
   const list = $('list');
   list.innerHTML = '';
   for (const item of items) {
     const li = document.createElement('li');
-    li.innerHTML = `<button>${item.user?.name || item.id} (${Math.round(item.distanceKm || 0)} km)</button>`;
-    li.querySelector('button').onclick = () => initChat(kind, item.id);
+    li.innerHTML = `<button>${item.name || item.id} (${Math.round(item.distanceKm || 0)} km)</button>`;
+    li.querySelector('button').onclick = () => initChat(item.kind, item.id);
     list.appendChild(li);
   }
 }
@@ -348,11 +324,7 @@ function startSocket() {
   socket = new WebSocket(wsUrl);
   socket.onmessage = (evt) => {
     const d = JSON.parse(evt.data);
-    if (d.type === 'message') {
-      const p = document.createElement('p');
-      p.textContent = `${d.userId}: ${d.text}`;
-      $('feed').appendChild(p);
-    }
+    if (d.type === 'message') addFeedLine(`${d.userId}: ${d.text}`);
   };
 }
 

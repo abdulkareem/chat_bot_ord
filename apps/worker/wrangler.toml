@@ -11,7 +11,6 @@ tag = "v1"
 new_sqlite_classes = ["ChatRoomDO"]
 
 [vars]
-BACKEND_URL = "http://localhost:3001"
+# Replace with Railway backend public URL in production
+BACKEND_URL = "https://your-railway-backend.up.railway.app"
 DEV_EXPOSE_OTP = "true"
-# apps/worker/wrangler.toml
-name = 'vyntarochat'

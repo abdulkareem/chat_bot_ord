@@ -11,6 +11,7 @@ enum Role {
   CUSTOMER
   VENDOR
   DRIVER
+  SERVICE_AGENT
   ADMIN
 }
 
@@ -30,6 +31,7 @@ enum VehicleType {
 enum OrderType {
   ORDER
   RIDE
+  SERVICE
 }
 
 enum OrderStatus {
@@ -39,41 +41,72 @@ enum OrderStatus {
   COMPLETED
 }
 
+enum OnboardingType {
+  VENDOR
+  DRIVER
+  SERVICE
+}
+
+enum OnboardingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum LeadIntent {
+  SHOPPING
+  AUTO
+  SERVICE
+  UNKNOWN
+}
+
+enum LeadStatus {
+  OPEN
+  QUALIFIED
+  CONVERTED
+  CLOSED
+}
+
 model User {
-  id           String   @id @default(cuid())
-  name         String?
-  phone        String   @unique
-  role         Role
-  lastLatitude Float?
-  lastLongitude Float?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(cuid())
+  name           String?
+  phone          String   @unique
+  role           Role
+  lastLatitude   Float?
+  lastLongitude  Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  vendor       Vendor?
-  driver       Driver?
+  vendor          Vendor?
+  driver          Driver?
+  serviceAgent    ServiceAgent?
+  onboardingApps  OnboardingApplication[]
 
-  customerRooms ChatRoom[] @relation("CustomerRooms")
-  sentMessages  Message[]
+  customerRooms   ChatRoom[] @relation("CustomerRooms")
+  sentMessages    Message[]
 
   initiatedOrders OrderRide[] @relation("OrderInitiator")
+  leads           Lead[] @relation("LeadCustomer")
 
   @@index([lastLatitude, lastLongitude])
 }
 
 model Vendor {
-  id        String         @id @default(cuid())
-  userId    String         @unique
-  category  VendorCategory
-  isPaid    Boolean        @default(false)
-  rating    Float          @default(0)
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  id          String         @id @default(cuid())
+  userId      String         @unique
+  category    VendorCategory
+  isPaid      Boolean        @default(false)
+  paidBoost   Int            @default(0)
+  rating      Float          @default(0)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 
-  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  chatRooms ChatRoom[]
-  orders    OrderRide[]
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatRooms   ChatRoom[]
+  orders      OrderRide[]
+  leads       Lead[]
 
-  @@index([isPaid, rating])
+  @@index([isPaid, paidBoost, rating])
 }
 
 model Driver {
@@ -81,14 +114,70 @@ model Driver {
   userId      String      @unique
   vehicleType VehicleType
   isAvailable Boolean     @default(true)
+  rating      Float       @default(0)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   chatRooms   ChatRoom[]
   rides       OrderRide[]
+  leads       Lead[]
 
-  @@index([vehicleType, isAvailable])
+  @@index([vehicleType, isAvailable, rating])
+}
+
+model ServiceAgent {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  serviceType String
+  isAvailable Boolean  @default(true)
+  rating      Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leads       Lead[]
+  orders      OrderRide[]
+
+  @@index([serviceType, isAvailable, rating])
+}
+
+model OnboardingApplication {
+  id          String           @id @default(cuid())
+  applicantId String
+  type        OnboardingType
+  status      OnboardingStatus @default(PENDING)
+  details     Json?
+  reviewedBy  String?
+  reviewNotes String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  applicant   User             @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  @@index([type, status, createdAt])
+}
+
+model Lead {
+  id             String      @id @default(cuid())
+  customerId     String
+  intent         LeadIntent
+  query          String
+  status         LeadStatus  @default(OPEN)
+  vendorId       String?
+  driverId       String?
+  serviceAgentId String?
+  metadata       Json?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  customer       User        @relation("LeadCustomer", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor         Vendor?     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  driver         Driver?     @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  serviceAgent   ServiceAgent? @relation(fields: [serviceAgentId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, createdAt])
+  @@index([intent, status, createdAt])
 }
 
 model ChatRoom {
@@ -122,18 +211,21 @@ model Message {
 }
 
 model OrderRide {
-  id          String      @id @default(cuid())
-  type        OrderType
-  status      OrderStatus @default(PENDING)
-  customerId  String
-  vendorId    String?
-  driverId    String?
-  metadata    Json?
-  createdAt   DateTime    @default(now())
+  id             String       @id @default(cuid())
+  type           OrderType
+  status         OrderStatus  @default(PENDING)
+  customerId     String
+  vendorId       String?
+  driverId       String?
+  serviceAgentId String?
+  leadId         String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
 
-  customer    User        @relation("OrderInitiator", fields: [customerId], references: [id], onDelete: Cascade)
-  vendor      Vendor?     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  driver      Driver?     @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  customer       User         @relation("OrderInitiator", fields: [customerId], references: [id], onDelete: Cascade)
+  vendor         Vendor?      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  driver         Driver?      @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  serviceAgent   ServiceAgent? @relation(fields: [serviceAgentId], references: [id], onDelete: Cascade)
 
   @@index([customerId, createdAt])
   @@index([type, status])

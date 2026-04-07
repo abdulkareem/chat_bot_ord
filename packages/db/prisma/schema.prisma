@@ -53,6 +53,12 @@ enum OnboardingStatus {
   REJECTED
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum LeadIntent {
   SHOPPING
   AUTO
@@ -103,6 +109,8 @@ model User {
   name           String?
   phone          String   @unique
   role           Role
+  countryCode    String?  @default("+1")
+  onboardingStatus OnboardingStatus @default(PENDING)
   lastLatitude   Float?
   lastLongitude  Float?
   createdAt      DateTime @default(now())
@@ -118,8 +126,13 @@ model User {
 
   initiatedOrders OrderRide[] @relation("OrderInitiator")
   leads           Lead[] @relation("LeadCustomer")
+  otpRecords      OtpVerification[]
+  sessions        UserSession[]
+  approvals       AdminApproval[] @relation("ApplicantApprovals")
+  reviewedApprovals AdminApproval[] @relation("ReviewerApprovals")
 
   @@index([lastLatitude, lastLongitude])
+  @@index([role, onboardingStatus])
 }
 
 model Vendor {
@@ -381,4 +394,59 @@ model AnalyticsMetric {
 
   @@index([metricDate, category])
   @@index([createdAt])
+}
+
+model OtpVerification {
+  id          String   @id @default(cuid())
+  userId      String?
+  phone       String
+  otpHash     String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  channel     String   @default("WHATSAPP")
+  provider    String   @default("INTERNAL")
+  purpose     String   @default("LOGIN")
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([phone, createdAt])
+  @@index([phone, expiresAt])
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  deviceId     String
+  jwtId        String   @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  lastSeenAt   DateTime @default(now())
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deviceId])
+  @@index([expiresAt, revokedAt])
+}
+
+model AdminApproval {
+  id            String         @id @default(cuid())
+  userId        String
+  status        ApprovalStatus @default(PENDING)
+  requestedRole Role
+  notes         String?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  applicant     User           @relation("ApplicantApprovals", fields: [userId], references: [id], onDelete: Cascade)
+  reviewer      User?          @relation("ReviewerApprovals", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, requestedRole, createdAt])
+  @@index([userId, status])
 }

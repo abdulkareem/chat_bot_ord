@@ -1,5 +1,6 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import Redis from 'ioredis';
 import { Queue, Worker as BullWorker } from 'bullmq';
 import {
@@ -17,7 +18,8 @@ import {
   SubscriptionType,
   VendorStatus,
   PaymentStatus,
-  LeadEventType
+  LeadEventType,
+  ApprovalStatus
 } from '@prisma/client';
 
 const app = express();
@@ -31,7 +33,7 @@ const AUTH_ROLES = {
   CUSTOMER: Role.CUSTOMER,
   VENDOR: Role.VENDOR,
   DRIVER: Role.DRIVER,
-  SERVICE_AGENT: Role.SERVICE_AGENT,
+  SERVICE_PROVIDER: Role.SERVICE_AGENT,
   ADMIN: Role.ADMIN
 };
 
@@ -45,6 +47,16 @@ const RATE_LIMITS = {
   customerChat: { limit: 30, windowSec: 60 },
   vendorApi: { limit: 120, windowSec: 60 }
 };
+
+const DIAL_CODES = {
+  IN: '+91', US: '+1', CA: '+1', GB: '+44', AE: '+971', SA: '+966', AU: '+61', SG: '+65'
+};
+
+const SUBSCRIPTION_PRICE_BOOK = {
+  monthly: { standard: 99, launch: 69, months: 1 },
+  yearly: { standard: 999, launch: 699, months: 12 }
+};
+const LAUNCH_OFFER_END_UTC = new Date('2026-05-31T23:59:59.999Z').getTime();
 
 const redisEnabled = Boolean(process.env.REDIS_URL);
 const redis = redisEnabled ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 1 }) : null;
@@ -88,12 +100,56 @@ function jsonError(res, status, error) {
   return res.status(status).json({ error });
 }
 
-function auth(req, res, next) {
+function detectCountryCode(req) {
+  const country = String(req.headers['cf-ipcountry'] || req.headers['x-country-code'] || 'US').toUpperCase();
+  return DIAL_CODES[country] || '+1';
+}
+
+function normalizePhone(phone, fallbackCode = '+1') {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length <= 10) return `${fallbackCode}${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
+  return `+${digits}`;
+}
+
+function hashOtp(otp) {
+  return crypto.createHash('sha256').update(String(otp)).digest('hex');
+}
+
+function isLaunchOfferActive() {
+  return Date.now() <= LAUNCH_OFFER_END_UTC;
+}
+
+function planPrice(planType) {
+  const plan = SUBSCRIPTION_PRICE_BOOK[planType] || SUBSCRIPTION_PRICE_BOOK.monthly;
+  return {
+    amount: isLaunchOfferActive() ? plan.launch : plan.standard,
+    months: plan.months,
+    launchOfferApplied: isLaunchOfferActive()
+  };
+}
+
+async function auth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return jsonError(res, 401, 'missing token');
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    const claims = jwt.verify(token, process.env.JWT_SECRET);
+    const deviceId = String(req.headers['x-device-id'] || '');
+    const activeSession = await prisma.userSession.findFirst({
+      where: {
+        userId: claims.sub,
+        jwtId: claims.jti,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+        ...(deviceId ? { deviceId } : {})
+      }
+    });
+    if (!activeSession) return jsonError(res, 401, 'session_expired');
+    await prisma.userSession.update({ where: { id: activeSession.id }, data: { lastSeenAt: new Date() } });
+    req.user = claims;
     return next();
   } catch {
     return jsonError(res, 401, 'invalid token');
@@ -199,6 +255,29 @@ function buildVendorScore(candidate) {
   };
 }
 
+function isPaidRole(role) {
+  return [Role.VENDOR, Role.DRIVER, Role.SERVICE_AGENT].includes(role);
+}
+
+async function assertSubscriptionActiveForUser(userId, role) {
+  if (!isPaidRole(role)) return { ok: true };
+  if (role === Role.VENDOR) {
+    const vendor = await prisma.vendor.findUnique({ where: { userId } });
+    if (!vendor) return { ok: false, reason: 'vendor_profile_required' };
+    const active = vendor.subscriptionExpiry && vendor.subscriptionExpiry.getTime() > Date.now();
+    if (!active) return { ok: false, reason: 'subscription_required' };
+    return { ok: true, vendor };
+  }
+  const active = await prisma.vendorSubscriptionInvoice.findFirst({
+    where: {
+      vendor: { userId },
+      endsAt: { gt: new Date() },
+      status: PaymentStatus.SUCCESS
+    }
+  });
+  return active ? { ok: true } : { ok: false, reason: 'subscription_required' };
+}
+
 async function trackLeadEvent({ leadId, vendorId, eventType, metadata }) {
   if (!leadId || !eventType) return;
   await prisma.leadEvent.create({
@@ -226,37 +305,127 @@ app.get('/health', async (_req, res) => {
 });
 
 app.post('/auth/send-otp', async (req, res) => {
-  const { phone } = req.body || {};
+  const { phone, channel = 'WHATSAPP' } = req.body || {};
   if (!phone) return jsonError(res, 400, 'phone required');
-  return res.json({ ok: true, otp: process.env.DEV_OTP || '123456' });
+
+  const normalizedPhone = normalizePhone(phone, detectCountryCode(req));
+  if (normalizedPhone.length < 10) return jsonError(res, 400, 'invalid_phone');
+
+  const otp = String(process.env.DEV_OTP || Math.floor(100000 + Math.random() * 900000));
+  const otpHash = hashOtp(otp);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+  let user = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        phone: normalizedPhone,
+        role: Role.CUSTOMER,
+        name: 'New User',
+        countryCode: normalizedPhone.match(/^\+\d{1,3}/)?.[0] || detectCountryCode(req)
+      }
+    });
+  }
+
+  await prisma.otpVerification.create({
+    data: {
+      userId: user.id,
+      phone: normalizedPhone,
+      otpHash,
+      expiresAt,
+      channel,
+      provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_API' : 'DEV',
+      metadata: { fallbackChannels: ['SMS', 'EMAIL'] }
+    }
+  });
+
+  return res.json({
+    ok: true,
+    phone: normalizedPhone,
+    expiresAt: expiresAt.toISOString(),
+    delivery: process.env.WHATSAPP_API_URL ? 'whatsapp_api' : 'fallback_simulated',
+    ...(process.env.DEV_OTP ? { otp } : {})
+  });
 });
 
 app.post('/auth/verify-otp', async (req, res) => {
-  const { phone, otp } = req.body || {};
+  const { phone, otp, deviceId } = req.body || {};
   if (!phone || !otp) return jsonError(res, 400, 'phone and otp required');
-  if ((process.env.DEV_OTP || '123456') !== String(otp)) return jsonError(res, 401, 'invalid otp');
+  const normalizedPhone = normalizePhone(phone, detectCountryCode(req));
 
-  let user = await prisma.user.findUnique({ where: { phone } });
-  if (!user) user = await prisma.user.create({ data: { phone, role: Role.CUSTOMER, name: 'New User' } });
-  const token = jwt.sign({ sub: user.id, role: user.role, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: '7d' });
-  return res.json({ token, user });
+  const otpRow = await prisma.otpVerification.findFirst({
+    where: {
+      phone: normalizedPhone,
+      consumedAt: null,
+      expiresAt: { gt: new Date() }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+  if (!otpRow) return jsonError(res, 401, 'otp_expired');
+  if (hashOtp(String(otp)) !== otpRow.otpHash) return jsonError(res, 401, 'invalid_otp');
+
+  await prisma.otpVerification.update({ where: { id: otpRow.id }, data: { consumedAt: new Date() } });
+
+  let user = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
+  if (!user) user = await prisma.user.create({ data: { phone: normalizedPhone, role: Role.CUSTOMER, name: 'New User' } });
+
+  const jwtId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const session = await prisma.userSession.create({
+    data: {
+      userId: user.id,
+      deviceId: String(deviceId || req.headers['x-device-id'] || 'unknown-device'),
+      jwtId,
+      expiresAt,
+      ipAddress: String(req.headers['x-forwarded-for'] || req.ip || ''),
+      userAgent: String(req.headers['user-agent'] || '')
+    }
+  });
+
+  const token = jwt.sign(
+    { sub: user.id, role: user.role, phone: user.phone, onboardingStatus: user.onboardingStatus, jti: jwtId },
+    process.env.JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+  return res.json({ token, user, sessionId: session.id, expiresAt: expiresAt.toISOString() });
 });
 
 app.post('/user/register', auth, async (req, res) => {
   const { name, role, lastLocation } = req.body || {};
-  const validRole = Object.values(Role).includes(role) ? role : req.user.role;
+  const roleMap = {
+    CUSTOMER: Role.CUSTOMER,
+    DRIVER: Role.DRIVER,
+    VENDOR: Role.VENDOR,
+    SERVICE_PROVIDER: Role.SERVICE_AGENT,
+    SERVICE_AGENT: Role.SERVICE_AGENT,
+    SUPER_ADMIN: Role.ADMIN,
+    ADMIN: Role.ADMIN
+  };
+  const validRole = roleMap[String(role || '').toUpperCase()] || req.user.role;
+  const needsApproval = [Role.VENDOR, Role.DRIVER, Role.SERVICE_AGENT].includes(validRole);
 
   const user = await prisma.user.update({
     where: { id: req.user.sub },
     data: {
       name: name || undefined,
       role: validRole,
+      onboardingStatus: needsApproval ? OnboardingStatus.PENDING : OnboardingStatus.APPROVED,
       lastLatitude: lastLocation?.lat,
       lastLongitude: lastLocation?.lng
     }
   });
 
-  return res.json({ user });
+  if (needsApproval) {
+    await prisma.adminApproval.create({
+      data: {
+        userId: user.id,
+        requestedRole: validRole,
+        status: ApprovalStatus.PENDING
+      }
+    });
+  }
+
+  return res.json({ user, requiresApproval: needsApproval });
 });
 
 app.post('/onboarding/:type', auth, async (req, res) => {
@@ -273,6 +442,38 @@ app.post('/onboarding/:type', auth, async (req, res) => {
   });
 
   return res.status(201).json({ application: appRow });
+});
+
+app.post('/chat/intent', auth, rateLimit, async (req, res) => {
+  const { message, lat, lng } = req.body || {};
+  const intent = intentFromMessage(message);
+  const customer = await prisma.user.findUnique({ where: { id: req.user.sub } });
+  const sourceLat = Number.isFinite(Number(lat)) ? Number(lat) : customer?.lastLatitude;
+  const sourceLng = Number.isFinite(Number(lng)) ? Number(lng) : customer?.lastLongitude;
+  if (!Number.isFinite(sourceLat) || !Number.isFinite(sourceLng)) {
+    return res.json({ intent: intent.intent, quickReplies: ['Share location'], results: [] });
+  }
+
+  const box = boundingBox(sourceLat, sourceLng, 8);
+  const rows = await prisma.vendor.findMany({
+    where: {
+      status: VendorStatus.ACTIVE,
+      latitude: { gte: box.minLat, lte: box.maxLat },
+      longitude: { gte: box.minLng, lte: box.maxLng }
+    },
+    include: { user: { select: { name: true, phone: true } } },
+    take: 10
+  });
+  const results = rows.map((v) => ({
+    id: v.id,
+    kind: 'vendor',
+    name: v.user?.name || 'Vendor',
+    distanceKm: distanceKm(sourceLat, sourceLng, v.latitude, v.longitude),
+    whatsappLink: `https://wa.me/${(v.user?.phone || '').replace(/[^\d]/g, '')}?text=${encodeURIComponent(`Vyntaro lead: ${message || ''}`)}`,
+    fallback: { type: 'in_app_chat', endpoint: '/chat/initiate' }
+  })).sort((a, b) => a.distanceKm - b.distanceKm);
+
+  return res.json({ intent: intent.intent, quickReplies: ['Show more nearby', 'Open WhatsApp chat'], results: results.slice(0, 5) });
 });
 
 app.get('/vendors/nearby', auth, allow(Role.CUSTOMER), rateLimit, async (req, res) => {
@@ -343,7 +544,12 @@ app.get('/vendors/nearby', auth, allow(Role.CUSTOMER), rateLimit, async (req, re
       });
     })
     .filter((v) => v.distanceKm <= maxKm)
-    .sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm)
+    .sort((a, b) =>
+      a.distanceKm - b.distanceKm
+      || (SUBSCRIPTION_RANK_BOOST[b.subscriptionType] || 0) - (SUBSCRIPTION_RANK_BOOST[a.subscriptionType] || 0)
+      || b.rating - a.rating
+      || b.score - a.score
+    )
     .slice(0, pageSize);
 
   const response = { page, pageSize, total, vendors: ranked, cache: 'miss' };
@@ -359,6 +565,22 @@ app.get('/vendors/nearby', auth, allow(Role.CUSTOMER), rateLimit, async (req, re
   return res.json(response);
 });
 
+app.post('/chat/wa-link', auth, async (req, res) => {
+  const { phone, query, location } = req.body || {};
+  const targetPhone = normalizePhone(phone, detectCountryCode(req));
+  if (!targetPhone) return jsonError(res, 400, 'phone_required');
+  const brand = 'Vyntaro';
+  const message = `${brand} lead\nQuery: ${String(query || 'Hello')}\nLocation: ${location?.lat ?? 'NA'},${location?.lng ?? 'NA'}`;
+  const waPhone = targetPhone.replace(/[^\d]/g, '');
+  return res.json({
+    waLink: `https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`,
+    fallback: {
+      type: 'IN_APP_CHAT',
+      initiateEndpoint: '/chat/initiate'
+    }
+  });
+});
+
 app.post('/vendors/:id/boost', auth, allow(Role.VENDOR, Role.ADMIN), rateLimit, async (req, res) => {
   const vendorId = req.params.id;
   const { boostPoints = 15, amount, currency = 'INR', startsAt, endsAt } = req.body || {};
@@ -366,6 +588,10 @@ app.post('/vendors/:id/boost', auth, allow(Role.VENDOR, Role.ADMIN), rateLimit, 
   const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
   if (!vendor) return jsonError(res, 404, 'vendor_not_found');
   if (req.user.role === Role.VENDOR && vendor.userId !== req.user.sub) return jsonError(res, 403, 'forbidden');
+  if (req.user.role === Role.VENDOR) {
+    const subCheck = await assertSubscriptionActiveForUser(req.user.sub, Role.VENDOR);
+    if (!subCheck.ok) return jsonError(res, 402, subCheck.reason);
+  }
 
   const payment = await prisma.paymentTransaction.create({
     data: {
@@ -395,25 +621,27 @@ app.post('/vendors/:id/boost', auth, allow(Role.VENDOR, Role.ADMIN), rateLimit, 
 
 app.post('/vendors/:id/subscription', auth, allow(Role.VENDOR, Role.ADMIN), async (req, res) => {
   const vendorId = req.params.id;
-  const { subscriptionType = SubscriptionType.BASIC, months = 1, amount, provider = 'RAZORPAY' } = req.body || {};
+  const { subscriptionType = SubscriptionType.BASIC, months = 1, amount, provider = 'RAZORPAY', planType = 'monthly' } = req.body || {};
 
   const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
   if (!vendor) return jsonError(res, 404, 'vendor_not_found');
   if (req.user.role === Role.VENDOR && vendor.userId !== req.user.sub) return jsonError(res, 403, 'forbidden');
   if (!Object.values(SubscriptionType).includes(subscriptionType)) return jsonError(res, 400, 'invalid_subscription_type');
 
+  const plan = planPrice(String(planType).toLowerCase() === 'yearly' ? 'yearly' : 'monthly');
+  const durationMonths = Math.max(1, Number(months || plan.months));
   const expiry = new Date();
-  expiry.setMonth(expiry.getMonth() + Math.max(1, Number(months)));
+  expiry.setMonth(expiry.getMonth() + durationMonths);
 
   const txn = await prisma.paymentTransaction.create({
     data: {
       vendorId,
-      amount: Number(amount || (subscriptionType === SubscriptionType.PREMIUM ? 1999 : 799)),
+      amount: Number(amount || plan.amount),
       currency: 'INR',
       provider,
       providerRef: `mock_sub_${Date.now()}`,
       status: PaymentStatus.SUCCESS,
-      metadata: { feature: 'subscription', subscriptionType, months }
+      metadata: { feature: 'subscription', subscriptionType, months: durationMonths, planType, launchOfferApplied: plan.launchOfferApplied }
     }
   });
 
@@ -438,7 +666,7 @@ app.post('/vendors/:id/subscription', auth, allow(Role.VENDOR, Role.ADMIN), asyn
     }
   });
 
-  return res.json({ vendor: updatedVendor, invoice, payment: txn });
+  return res.json({ vendor: updatedVendor, invoice, payment: txn, pricing: { amountInr: txn.amount, launchOfferApplied: plan.launchOfferApplied } });
 });
 
 app.post('/leads/:id/events', auth, async (req, res) => {
@@ -500,6 +728,60 @@ app.post('/order/create', auth, allow(Role.CUSTOMER), rateLimit, async (req, res
   }
 
   return res.status(201).json({ order });
+});
+
+app.post('/admin/auth/send-otp', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email || !String(email).includes('@')) return jsonError(res, 400, 'valid email required');
+  const otp = String(process.env.DEV_OTP || Math.floor(100000 + Math.random() * 900000));
+  const otpHash = hashOtp(otp);
+  await prisma.otpVerification.create({
+    data: {
+      phone: `email:${String(email).toLowerCase()}`,
+      otpHash,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      channel: 'EMAIL',
+      purpose: 'ADMIN_LOGIN'
+    }
+  });
+  return res.json({ ok: true, resendInSec: 30, ...(process.env.DEV_OTP ? { otp } : {}) });
+});
+
+app.post('/admin/auth/verify-otp', async (req, res) => {
+  const { email, otp } = req.body || {};
+  if (!email || !otp) return jsonError(res, 400, 'email and otp required');
+  const marker = `email:${String(email).toLowerCase()}`;
+  const row = await prisma.otpVerification.findFirst({
+    where: { phone: marker, consumedAt: null, purpose: 'ADMIN_LOGIN', expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: 'desc' }
+  });
+  if (!row || row.otpHash !== hashOtp(otp)) return jsonError(res, 401, 'invalid_otp');
+  await prisma.otpVerification.update({ where: { id: row.id }, data: { consumedAt: new Date() } });
+  const token = jwt.sign({ sub: `admin:${email}`, role: Role.ADMIN, email }, process.env.JWT_SECRET, { expiresIn: '1d' });
+  return res.json({ token });
+});
+
+app.get('/admin/approvals', auth, allow(Role.ADMIN), async (req, res) => {
+  const rows = await prisma.adminApproval.findMany({
+    where: { status: ApprovalStatus.PENDING },
+    include: { applicant: { select: { id: true, name: true, phone: true, role: true } } },
+    orderBy: { createdAt: 'asc' }
+  });
+  return res.json({ approvals: rows });
+});
+
+app.post('/admin/approvals/:id', auth, allow(Role.ADMIN), async (req, res) => {
+  const { decision, notes } = req.body || {};
+  const status = String(decision).toUpperCase() === 'APPROVE' ? ApprovalStatus.APPROVED : ApprovalStatus.REJECTED;
+  const approval = await prisma.adminApproval.update({
+    where: { id: req.params.id },
+    data: { status, notes, reviewedById: req.user.sub, reviewedAt: new Date() }
+  });
+  await prisma.user.update({
+    where: { id: approval.userId },
+    data: { onboardingStatus: status === ApprovalStatus.APPROVED ? OnboardingStatus.APPROVED : OnboardingStatus.REJECTED }
+  });
+  return res.json({ approval });
 });
 
 app.get('/analytics/summary', auth, allow(Role.ADMIN), async (req, res) => {

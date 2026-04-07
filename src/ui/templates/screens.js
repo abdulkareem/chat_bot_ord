@@ -111,6 +111,7 @@ export const onboardingScreen = () => layout({
     const status = document.getElementById('status');
     let token = localStorage.getItem('vyntaro_token');
     let normalizedPhone = '';
+    let lastVerification = null;
     const deviceId = localStorage.getItem('vyntaro_device_id') || ('web-' + crypto.randomUUID());
     localStorage.setItem('vyntaro_device_id', deviceId);
 
@@ -130,6 +131,26 @@ export const onboardingScreen = () => layout({
       return data;
     }
 
+    function openWhatsapp(verification) {
+      if (!verification) throw new Error('verification links missing');
+      const deepLink = verification.whatsappDeepLink;
+      const webLink = verification.whatsappWebLink;
+      if (!webLink) throw new Error('whatsapp link missing');
+
+      const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+      if (isMobile && deepLink) {
+        const startedAt = Date.now();
+        window.location.href = deepLink;
+        setTimeout(() => {
+          if (document.visibilityState === 'visible' && Date.now() - startedAt < 2200) {
+            window.location.href = webLink;
+          }
+        }, 1200);
+        return;
+      }
+      window.open(webLink, '_blank', 'noopener,noreferrer');
+    }
+
     function setOut(data) { out.textContent = JSON.stringify(data, null, 2); }
     function getLocation() {
       return new Promise((resolve) => {
@@ -143,9 +164,10 @@ export const onboardingScreen = () => layout({
         const loc = await getLocation();
         const data = await post('/auth/request-whatsapp', { phone: document.getElementById('phone').value.trim(), deviceId, location: loc });
         normalizedPhone = data.phone;
+        lastVerification = data.verification || null;
         setOut(data);
         status.textContent = 'WhatsApp opened. Send verification message and enter OTP.';
-        window.location.href = data.verification.whatsappDeepLink;
+        openWhatsapp(lastVerification);
         document.getElementById('otp').style.display = 'block';
         document.getElementById('verifyBtn').style.display = 'inline-block';
       } catch (e) { status.textContent = e.message; }
@@ -153,8 +175,14 @@ export const onboardingScreen = () => layout({
 
     document.getElementById('verifyBtn').onclick = async () => {
       try {
+        const otpValue = document.getElementById('otp').value.trim();
+        if (!otpValue) {
+          openWhatsapp(lastVerification);
+          status.textContent = 'WhatsApp reopened. Send the verification message, then enter OTP.';
+          return;
+        }
         const loc = await getLocation();
-        const data = await post('/auth/verify-otp', { phone: normalizedPhone || document.getElementById('phone').value.trim(), otp: document.getElementById('otp').value.trim(), deviceId, location: loc });
+        const data = await post('/auth/verify-otp', { phone: normalizedPhone || document.getElementById('phone').value.trim(), otp: otpValue, deviceId, location: loc });
         token = data.token;
         localStorage.setItem('vyntaro_token', token);
         setOut(data);

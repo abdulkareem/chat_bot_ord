@@ -1,5 +1,3 @@
-import { ChatRoomDO } from './chat-room-do.js';
-
 const otpBucket = new Map();
 const rateBucket = new Map();
 
@@ -50,8 +48,6 @@ function makeCorsHeaders(origin = '*') {
   };
 }
 
-export { ChatRoomDO };
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -85,19 +81,14 @@ export default {
       return proxy(request, env, '/chat/intent');
     }
 
-    if (url.pathname.startsWith('/realtime/')) {
-      const roomId = url.pathname.split('/').at(-1);
+    if (url.pathname === '/ws' || url.pathname.startsWith('/realtime/')) {
       const token = request.headers.get('authorization')?.replace('Bearer ', '') || url.searchParams.get('token');
       if (!token) return json({ error: 'missing token' }, 401);
       const claims = await verifyJwt(token, env.JWT_SECRET);
       if (!claims) return json({ error: 'invalid token' }, 401);
-
-      const doId = env.CHAT_ROOM_DO.idFromName(roomId);
-      const doUrl = new URL('https://do/ws');
-      doUrl.searchParams.set('roomId', roomId);
-      doUrl.searchParams.set('userId', claims.sub);
-      doUrl.searchParams.set('token', token);
-      return env.CHAT_ROOM_DO.get(doId).fetch(doUrl.toString(), request);
+      const backendUrl = new URL(`${env.BACKEND_URL}/ws`);
+      backendUrl.searchParams.set('token', token);
+      return fetch(new Request(backendUrl.toString(), request));
     }
 
     const publicRoutes = ['/auth/send-otp', '/auth/verify-otp', '/health'];

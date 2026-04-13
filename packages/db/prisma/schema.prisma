@@ -130,9 +130,89 @@ model User {
   sessions        UserSession[]
   approvals       AdminApproval[] @relation("ApplicantApprovals")
   reviewedApprovals AdminApproval[] @relation("ReviewerApprovals")
+  userRoles      UserRole[]
+  chatSessions   ChatSession[]
+  chatMessages   ChatMessage[]
 
   @@index([lastLatitude, lastLongitude])
   @@index([role, onboardingStatus])
+}
+
+model RoleDefinition {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  id        String         @id @default(cuid())
+  userId    String
+  roleId    String
+  assignedAt DateTime      @default(now())
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      RoleDefinition @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([roleId, assignedAt])
+  @@map("user_roles")
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  isActive    Boolean  @default(true)
+  handlerKey  String
+  launchStage String   @default("general")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  chatSessions ChatSession[]
+  chatMessages ChatMessage[]
+
+  @@index([isActive, launchStage])
+  @@map("services")
+}
+
+model ChatSession {
+  id                String    @id @default(cuid())
+  userId            String
+  currentServiceId  String?
+  conversationStage String    @default("service_selection")
+  lastAction        String?
+  context           Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentService    Service?  @relation(fields: [currentServiceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, updatedAt])
+  @@index([currentServiceId, conversationStage])
+  @@map("user_sessions")
+}
+
+model ChatMessage {
+  id          String   @id @default(cuid())
+  userId      String
+  serviceId   String?
+  direction   String
+  content     String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([serviceId, createdAt])
+  @@map("messages")
 }
 
 model Vendor {

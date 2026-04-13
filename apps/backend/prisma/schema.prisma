@@ -53,6 +53,12 @@ enum OnboardingStatus {
   REJECTED
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum LeadIntent {
   SHOPPING
   AUTO
@@ -103,6 +109,8 @@ model User {
   name           String?
   phone          String   @unique
   role           Role
+  countryCode    String?  @default("+1")
+  onboardingStatus OnboardingStatus @default(PENDING)
   lastLatitude   Float?
   lastLongitude  Float?
   createdAt      DateTime @default(now())
@@ -118,8 +126,93 @@ model User {
 
   initiatedOrders OrderRide[] @relation("OrderInitiator")
   leads           Lead[] @relation("LeadCustomer")
+  otpRecords      OtpVerification[]
+  sessions        UserSession[]
+  approvals       AdminApproval[] @relation("ApplicantApprovals")
+  reviewedApprovals AdminApproval[] @relation("ReviewerApprovals")
+  userRoles      UserRole[]
+  chatSessions   ChatSession[]
+  chatMessages   ChatMessage[]
 
   @@index([lastLatitude, lastLongitude])
+  @@index([role, onboardingStatus])
+}
+
+model RoleDefinition {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  id        String         @id @default(cuid())
+  userId    String
+  roleId    String
+  assignedAt DateTime      @default(now())
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      RoleDefinition @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([roleId, assignedAt])
+  @@map("user_roles")
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  isActive    Boolean  @default(true)
+  handlerKey  String
+  launchStage String   @default("general")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  chatSessions ChatSession[]
+  chatMessages ChatMessage[]
+
+  @@index([isActive, launchStage])
+  @@map("services")
+}
+
+model ChatSession {
+  id                String    @id @default(cuid())
+  userId            String
+  currentServiceId  String?
+  conversationStage String    @default("service_selection")
+  lastAction        String?
+  context           Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentService    Service?  @relation(fields: [currentServiceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, updatedAt])
+  @@index([currentServiceId, conversationStage])
+  @@map("user_sessions")
+}
+
+model ChatMessage {
+  id          String   @id @default(cuid())
+  userId      String
+  serviceId   String?
+  direction   String
+  content     String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([serviceId, createdAt])
+  @@map("messages")
 }
 
 model Vendor {
@@ -381,4 +474,59 @@ model AnalyticsMetric {
 
   @@index([metricDate, category])
   @@index([createdAt])
+}
+
+model OtpVerification {
+  id          String   @id @default(cuid())
+  userId      String?
+  phone       String
+  otpHash     String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  channel     String   @default("WHATSAPP")
+  provider    String   @default("INTERNAL")
+  purpose     String   @default("LOGIN")
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([phone, createdAt])
+  @@index([phone, expiresAt])
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  deviceId     String
+  jwtId        String   @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  lastSeenAt   DateTime @default(now())
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deviceId])
+  @@index([expiresAt, revokedAt])
+}
+
+model AdminApproval {
+  id            String         @id @default(cuid())
+  userId        String
+  status        ApprovalStatus @default(PENDING)
+  requestedRole Role
+  notes         String?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  applicant     User           @relation("ApplicantApprovals", fields: [userId], references: [id], onDelete: Cascade)
+  reviewer      User?          @relation("ReviewerApprovals", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, requestedRole, createdAt])
+  @@index([userId, status])
 }

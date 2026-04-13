@@ -316,7 +316,7 @@ $('sendMsg').onclick = async () => {
 
   renderQuickReplies(data.quickReplies || []);
   renderList(data.results || []);
-  addFeedLine(`Bot: Intent ${data.intent || 'UNKNOWN'} detected. ${data.results?.length || 0} nearby options found.`);
+  addFeedLine(`Bot: ${data.reply || `Intent ${data.intent || 'UNKNOWN'} detected. ${data.results?.length || 0} nearby options found.`}`);
 };
 
 function renderList(items) {
@@ -344,11 +344,11 @@ async function initChat(kind, id) {
 }
 
 function startSocket() {
-  const wsUrl = API.replace('http', 'ws') + `/realtime/${roomId}?token=${encodeURIComponent(token)}`;
+  const wsUrl = API.replace('http', 'ws') + `/ws?token=${encodeURIComponent(token)}`;
   socket = new WebSocket(wsUrl);
   socket.onmessage = (evt) => {
     const d = JSON.parse(evt.data);
-    if (d.type === 'message') addFeedLine(`${d.userId}: ${d.text}`);
+    if (d.type === 'chat_response') addFeedLine(`Bot: ${d.reply}`);
   };
 }
 

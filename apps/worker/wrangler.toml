@@ -2,14 +2,6 @@ name = "hyperlocal-worker"
 main = "src/index.js"
 compatibility_date = "2026-04-02"
 
-[[durable_objects.bindings]]
-name = "CHAT_ROOM_DO"
-class_name = "ChatRoomDO"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["ChatRoomDO"]
-
 [vars]
 # Replace with Railway backend public URL in production
 BACKEND_URL = "https://your-railway-backend.up.railway.app"

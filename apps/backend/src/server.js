@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import Redis from 'ioredis';
@@ -21,6 +22,8 @@ import {
   LeadEventType,
   ApprovalStatus
 } from '@prisma/client';
+import { attachChatWebSocketServer } from './chat/ws-server.js';
+import { routeChatMessage } from './chat/chat-router.js';
 
 const app = express();
 const prisma = new PrismaClient();
@@ -259,6 +262,21 @@ function isPaidRole(role) {
   return [Role.VENDOR, Role.DRIVER, Role.SERVICE_AGENT].includes(role);
 }
 
+async function syncUserRole(userId, roleName) {
+  const normalized = String(roleName || '').toLowerCase();
+  if (!normalized) return;
+  const role = await prisma.roleDefinition.upsert({
+    where: { name: normalized },
+    update: { isActive: true },
+    create: { name: normalized, isActive: true }
+  });
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId, roleId: role.id } },
+    update: {},
+    create: { userId, roleId: role.id }
+  });
+}
+
 async function assertSubscriptionActiveForUser(userId, role) {
   if (!isPaidRole(role)) return { ok: true };
   if (role === Role.VENDOR) {
@@ -302,6 +320,15 @@ async function trackLeadEvent({ leadId, vendorId, eventType, metadata }) {
 app.get('/health', async (_req, res) => {
   const redisHealth = redis ? await redis.ping().then(() => 'ok').catch(() => 'error') : 'disabled';
   return res.json({ ok: true, service: 'railway-backend', redis: redisHealth, time: new Date().toISOString() });
+});
+
+app.get('/services/active', auth, async (_req, res) => {
+  const services = await prisma.service.findMany({
+    where: { isActive: true },
+    select: { id: true, name: true, handlerKey: true, launchStage: true },
+    orderBy: { name: 'asc' }
+  });
+  return res.json({ services });
 });
 
 app.post('/auth/send-otp', async (req, res) => {
@@ -368,6 +395,7 @@ app.post('/auth/verify-otp', async (req, res) => {
 
   let user = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
   if (!user) user = await prisma.user.create({ data: { phone: normalizedPhone, role: Role.CUSTOMER, name: 'New User' } });
+  await syncUserRole(user.id, user.role);
 
   const jwtId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -425,7 +453,29 @@ app.post('/user/register', auth, async (req, res) => {
     });
   }
 
+  await syncUserRole(user.id, validRole);
+
   return res.json({ user, requiresApproval: needsApproval });
+});
+
+app.get('/auth/me', auth, async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.sub },
+    include: {
+      userRoles: { include: { role: true } },
+      driver: true,
+      vendor: true
+    }
+  });
+  if (!user) return jsonError(res, 404, 'user_not_found');
+  return res.json({
+    user,
+    uiCapabilities: {
+      canAccessDriverView: Boolean(user.driver || user.userRoles.some((r) => r.role.name === 'driver')),
+      canAccessVendorView: Boolean(user.vendor || user.userRoles.some((r) => r.role.name === 'vendor')),
+      isAdmin: user.userRoles.some((r) => r.role.name === 'admin') || user.role === Role.ADMIN
+    }
+  });
 });
 
 app.post('/onboarding/:type', auth, async (req, res) => {
@@ -474,6 +524,19 @@ app.post('/chat/intent', auth, rateLimit, async (req, res) => {
   })).sort((a, b) => a.distanceKm - b.distanceKm);
 
   return res.json({ intent: intent.intent, quickReplies: ['Show more nearby', 'Open WhatsApp chat'], results: results.slice(0, 5) });
+});
+
+app.post('/chat/message', auth, rateLimit, async (req, res) => {
+  const { message } = req.body || {};
+  const routed = await routeChatMessage({ prisma, userId: req.user.sub, message });
+  const response = {
+    intent: routed.service?.name || 'SERVICE_SELECTION',
+    quickReplies: routed.serviceMenu?.length ? routed.serviceMenu.map((service) => service.name) : ['menu'],
+    results: [],
+    reply: routed.reply,
+    session: routed.session
+  };
+  return res.json(response);
 });
 
 app.get('/vendors/nearby', auth, allow(Role.CUSTOMER), rateLimit, async (req, res) => {
@@ -805,13 +868,71 @@ app.get('/analytics/summary', auth, allow(Role.ADMIN), async (req, res) => {
   });
 });
 
+app.get('/admin/users', auth, allow(Role.ADMIN), async (req, res) => {
+  const { page, pageSize, skip } = parsePagination(req.query);
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: pageSize,
+      skip,
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        role: true,
+        onboardingStatus: true,
+        createdAt: true
+      }
+    }),
+    prisma.user.count()
+  ]);
+  return res.json({ page, pageSize, total, users });
+});
+
+app.get('/admin/services', auth, allow(Role.ADMIN), async (_req, res) => {
+  const services = await prisma.service.findMany({ orderBy: { createdAt: 'asc' } });
+  return res.json({ services });
+});
+
+app.post('/admin/services/:id/toggle', auth, allow(Role.ADMIN), async (req, res) => {
+  const id = req.params.id;
+  const service = await prisma.service.findUnique({ where: { id } });
+  if (!service) return jsonError(res, 404, 'service_not_found');
+  const updated = await prisma.service.update({ where: { id }, data: { isActive: !service.isActive } });
+  return res.json({ service: updated });
+});
+
+app.get('/admin/chat/activity', auth, allow(Role.ADMIN), async (_req, res) => {
+  const [sessions, recentMessages] = await Promise.all([
+    prisma.chatSession.findMany({
+      take: 50,
+      orderBy: { updatedAt: 'desc' },
+      include: { user: { select: { id: true, phone: true, role: true } }, currentService: true }
+    }),
+    prisma.chatMessage.findMany({
+      take: 100,
+      orderBy: { createdAt: 'desc' },
+      include: { user: { select: { id: true, phone: true } }, service: true }
+    })
+  ]);
+  return res.json({ sessions, recentMessages });
+});
+
 app.use((err, _req, res, _next) => {
   console.error('backend_error', err);
   return jsonError(res, 500, 'internal_error');
 });
 
 const port = Number(process.env.PORT || 3001);
-app.listen(port, () => {
+const server = http.createServer(app);
+attachChatWebSocketServer({
+  server,
+  prisma,
+  jwtSecret: process.env.JWT_SECRET,
+  redis
+});
+
+server.listen(port, () => {
   console.log(`backend listening on ${port}`);
   console.log(`redis enabled: ${redisEnabled}`);
 });

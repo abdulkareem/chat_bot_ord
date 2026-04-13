@@ -2,14 +2,14 @@
 
 ## Production architecture
 
-`PWA (frontend) -> Cloudflare Worker (API gateway + chat orchestration + rate limit) -> Railway Backend (stateless business APIs) -> PostgreSQL + Redis + BullMQ workers`
+`PWA (frontend) -> Cloudflare Worker (auth/API gateway + websocket passthrough) -> Railway Backend (stateful chat engine + business APIs) -> PostgreSQL + Redis + BullMQ workers`
 
 ## Apps
 
 - `apps/frontend`: chat-first PWA (customer onboarding + quick-reply chat UX)
 - `apps/worker`: Cloudflare Worker routing/auth/rate-limit/gateway + Durable Object realtime relay
-- `apps/backend`: Express + Prisma business logic and admin/onboarding APIs
-- `packages/db/prisma`: shared Prisma schema source of truth
+- `apps/backend`: Express + Prisma business logic, unified WebSocket chat router, admin/onboarding APIs
+- `packages/db/prisma`: shared Prisma schema source of truth (includes services/roles/chat session models)
 
 ## Mandatory env variables
 
@@ -43,7 +43,10 @@
 
 ### Chat + discovery
 
-- `POST /chat/message` (worker chat orchestration route)
+- `POST /chat/message` (backward-compatible route backed by unified chat router)
+- `GET /services/active`
+- `GET /auth/me` (role-based capabilities)
+- `WS /ws` (persistent chat engine)
 - `GET /vendors/nearby`
 - `POST /leads/:id/events`
 - `POST /chat/initiate`
@@ -106,3 +109,9 @@ Deploy static app and point it to Worker URL only.
 ## Reference design
 
 Detailed scale + monetization blueprint: `docs/scaling-monetization-blueprint.md`.
+### Admin controls
+
+- `GET /admin/users`
+- `GET /admin/services`
+- `POST /admin/services/:id/toggle`
+- `GET /admin/chat/activity`

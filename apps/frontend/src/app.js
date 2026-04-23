@@ -1,4 +1,4 @@
-const API = localStorage.getItem('workerUrl') || 'http://localhost:8787';
+const API = localStorage.getItem('backendUrl') || localStorage.getItem('workerUrl') || 'http://localhost:3000';
 const WHATSAPP_VERIFY_NUMBER = '+919744917623';
 let token = localStorage.getItem('token');
 let roomId = null;

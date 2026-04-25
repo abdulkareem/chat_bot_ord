@@ -38,6 +38,7 @@
 - Phase 1 (recommended for cost): point frontend directly to Railway backend:
   - `localStorage.setItem('backendUrl', 'https://<your-railway-backend-domain>')`
   - or set Cloudflare Pages build variable `backendUrl` (lowercase) so build emits `runtime-config.js`
+  - or set Pages Functions variable `backendUrl` and use built-in proxy via `/api/*` (no browser CORS dependency)
 - Phase 2 (gateway mode): point frontend to Worker:
   - `localStorage.setItem('workerUrl', 'https://<your-worker-domain>')`
 
@@ -113,6 +114,7 @@ wrangler secret put BACKEND_URL
 ### Frontend
 
 Deploy static app and point it to `backendUrl` (Phase 1) or Worker URL (Phase 2).
+For Pages Functions proxy mode, keep `backendUrl` as a Pages variable and let frontend call `/api/*`.
 
 ## Reference design
 

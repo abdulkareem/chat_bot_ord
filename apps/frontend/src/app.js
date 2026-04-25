@@ -1,8 +1,8 @@
 const runtimeConfig = window.__RUNTIME_CONFIG__ || {};
-const API = localStorage.getItem('backendUrl')
+const BACKEND_BASE = localStorage.getItem('backendUrl')
   || runtimeConfig.backendUrl
-  || localStorage.getItem('workerUrl')
-  || 'http://localhost:3000';
+  || localStorage.getItem('workerUrl');
+const API = BACKEND_BASE || '/api';
 const APP_API_KEY = runtimeConfig.appApiKey || localStorage.getItem('APP_API_KEY') || '';
 const WHATSAPP_VERIFY_NUMBER = '+919744917623';
 let token = localStorage.getItem('token');
@@ -364,7 +364,11 @@ async function initChat(kind, id) {
 }
 
 function startSocket() {
-  const wsUrl = API.replace('http', 'ws') + `/ws?token=${encodeURIComponent(token)}`;
+  if (!BACKEND_BASE) {
+    addFeedLine('Bot: Realtime chat is not configured yet. Set backendUrl in app config to enable live WebSocket chat.');
+    return;
+  }
+  const wsUrl = BACKEND_BASE.replace('http', 'ws') + `/ws?token=${encodeURIComponent(token)}`;
   socket = new WebSocket(wsUrl);
   socket.onmessage = (evt) => {
     const d = JSON.parse(evt.data);

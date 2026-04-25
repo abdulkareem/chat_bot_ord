@@ -14,13 +14,27 @@ export async function onRequest(context) {
   const target = `${backendBase}/${path}${url.search || ''}`;
   const headers = new Headers(request.headers);
   headers.set('x-pages-proxy', 'v1');
+  headers.set('x-forwarded-host', new URL(request.url).host);
 
-  const proxied = await fetch(target, {
-    method: request.method,
-    headers,
-    body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
-    redirect: 'follow'
-  });
+  const requestBody = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
+  const maxRedirects = 3;
+  let redirectCount = 0;
+  let currentTarget = target;
+  let proxied;
+
+  while (redirectCount <= maxRedirects) {
+    proxied = await fetch(currentTarget, {
+      method: request.method,
+      headers,
+      body: requestBody,
+      redirect: 'manual'
+    });
+    if (![301, 302, 303, 307, 308].includes(proxied.status)) break;
+    const location = proxied.headers.get('location');
+    if (!location) break;
+    currentTarget = new URL(location, currentTarget).toString();
+    redirectCount += 1;
+  }
 
   return new Response(proxied.body, {
     status: proxied.status,

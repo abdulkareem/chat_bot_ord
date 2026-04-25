@@ -1,6 +1,7 @@
 export async function onRequest(context) {
   const { request, params, env } = context;
-  const backendBase = String(env.backendUrl || env.BACKEND_URL || '').replace(/\/+$/, '');
+  const fallbackBackend = 'https://chatbotord-production.up.railway.app';
+  const backendBase = String(env.backendUrl || env.BACKEND_URL || fallbackBackend).replace(/\/+$/, '');
   if (!backendBase) {
     return new Response(JSON.stringify({ error: 'backend_not_configured' }), {
       status: 500,

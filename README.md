@@ -39,6 +39,7 @@
   - `localStorage.setItem('backendUrl', 'https://<your-railway-backend-domain>')`
   - or set Cloudflare Pages build variable `backendUrl` (lowercase) so build emits `runtime-config.js`
   - or set Pages Functions variable `backendUrl` and use built-in proxy via `/api/*` (no browser CORS dependency)
+  - repository default fallback points to `https://chatbotord-production.up.railway.app` if no variable is set
 - Phase 2 (gateway mode): point frontend to Worker:
   - `localStorage.setItem('workerUrl', 'https://<your-worker-domain>')`
 

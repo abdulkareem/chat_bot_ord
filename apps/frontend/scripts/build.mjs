@@ -8,9 +8,10 @@ const root = path.resolve(__dirname, '..');
 const srcDir = path.join(root, 'src');
 const publicDir = path.join(root, 'public');
 const outDir = path.join(root, 'out');
+const defaultBackendUrl = 'https://chatbotord-production.up.railway.app';
 
 const runtimeConfig = {
-  backendUrl: process.env.backendUrl || process.env.BACKEND_URL || '',
+  backendUrl: process.env.backendUrl || process.env.BACKEND_URL || defaultBackendUrl,
   appApiKey: process.env.APP_API_KEY || ''
 };
 

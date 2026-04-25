@@ -1,4 +1,9 @@
-const API = localStorage.getItem('workerUrl') || 'http://localhost:8787';
+const runtimeConfig = window.__RUNTIME_CONFIG__ || {};
+const API = localStorage.getItem('backendUrl')
+  || runtimeConfig.backendUrl
+  || localStorage.getItem('workerUrl')
+  || 'http://localhost:3000';
+const APP_API_KEY = runtimeConfig.appApiKey || localStorage.getItem('APP_API_KEY') || '';
 const WHATSAPP_VERIFY_NUMBER = '+919744917623';
 let token = localStorage.getItem('token');
 let roomId = null;
@@ -41,11 +46,12 @@ function addFeedLine(text) {
 function renderQuickReplies(replies = []) {
   const guidance = $('guidance');
   guidance.innerHTML = '';
-  if (!replies.length) return;
+  const uniqueReplies = [...new Set(replies.filter(Boolean))].slice(0, 6);
+  if (!uniqueReplies.length) return;
   const wrap = document.createElement('div');
   wrap.className = 'row-buttons';
 
-  for (const reply of replies) {
+  for (const reply of uniqueReplies) {
     const b = document.createElement('button');
     b.className = 'secondary';
     b.textContent = reply;
@@ -140,7 +146,8 @@ $('verifyPhone').onclick = async () => {
         'content-type': 'application/json',
         'x-device-id': onboardingState.deviceId,
         'x-app-id': 'vyntaro',
-        'x-client-channel': 'pwa'
+        'x-client-channel': 'pwa',
+        ...(APP_API_KEY ? { 'x-api-key': APP_API_KEY } : {})
       },
       body: JSON.stringify({ phone: fullPhone })
     });
@@ -176,7 +183,8 @@ $('verifyOtp').onclick = async () => {
         'content-type': 'application/json',
         'x-device-id': onboardingState.deviceId,
         'x-app-id': 'vyntaro',
-        'x-client-channel': 'pwa'
+        'x-client-channel': 'pwa',
+        ...(APP_API_KEY ? { 'x-api-key': APP_API_KEY } : {})
       },
       body: JSON.stringify({ phone: fullPhone, otp })
     });
@@ -234,7 +242,8 @@ $('completeCustomer').onclick = async () => {
 
   await completeRegistration({ name, role: 'CUSTOMER', lastLocation: userLocation });
   showSlide('chatBox');
-  renderQuickReplies(['Shop groceries', 'Book auto', 'Find plumber']);
+  renderQuickReplies(['Book Auto', 'Book Taxi', 'Order from Shops', 'Find Services']);
+  addFeedLine('Bot: Hi 👋 I can help with Auto, Taxi, Shop Orders, and Local Services. Tap an option or type your request.');
 };
 
 $('autoYes').onclick = () => {
@@ -302,14 +311,16 @@ $('sendMsg').onclick = async () => {
   onboardingState.conversationMemory.push({ role: 'user', message: text, at: new Date().toISOString() });
   addFeedLine(`You: ${text}`);
 
-  const res = await fetch(`${API}/chat/message`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ message: text, lat: userLocation?.lat, lng: userLocation?.lng })
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
+  let data = {};
+  try {
+    const res = await fetch(`${API}/chat/message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ message: text, lat: userLocation?.lat, lng: userLocation?.lng })
+    });
+    data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error('chat_failed');
+  } catch {
     addFeedLine('Bot: Sorry, I could not process that.');
     return;
   }
@@ -324,14 +335,23 @@ function renderList(items) {
   list.innerHTML = '';
   for (const item of items) {
     const li = document.createElement('li');
-    li.innerHTML = `<button>${item.name || item.id} (${Math.round(item.distanceKm || 0)} km)</button>`;
+    const typeLabel = item.vehicleType || item.serviceType || item.kind || 'provider';
+    li.innerHTML = `<button>${item.name || item.id} • ${typeLabel} (${Math.round(item.distanceKm || 0)} km)</button>`;
     li.querySelector('button').onclick = () => initChat(item.kind, item.id);
     list.appendChild(li);
   }
 }
 
+$('messageInput').addEventListener('keydown', (evt) => {
+  if (evt.key === 'Enter') $('sendMsg').click();
+});
+
 async function initChat(kind, id) {
-  const payload = kind === 'vendor' ? { vendorId: id } : { driverId: id };
+  if (kind === 'service_agent') {
+    addFeedLine('Bot: Service provider shortlist is ready. Please place the order to connect instantly.');
+    return;
+  }
+  const payload = kind === 'vendor' ? { vendorId: id } : kind === 'driver' ? { driverId: id } : { serviceAgentId: id };
   const res = await fetch(`${API}/chat/initiate`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },

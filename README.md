@@ -2,7 +2,9 @@
 
 ## Production architecture
 
-`PWA (frontend) -> Cloudflare Worker (auth/API gateway + websocket passthrough) -> Railway Backend (stateful chat engine + business APIs) -> PostgreSQL + Redis + BullMQ workers`
+`Phase 1 (cost-optimized): PWA (Cloudflare Pages frontend) -> Railway Backend (REST + WebSocket) -> PostgreSQL + Redis + BullMQ workers`
+
+`Phase 2 (optional hardening): PWA -> Cloudflare Worker (auth/API gateway + websocket passthrough) -> Railway Backend -> PostgreSQL + Redis + BullMQ workers`
 
 ## Apps
 
@@ -18,11 +20,14 @@
 - `DATABASE_URL`
 - `JWT_SECRET`
 - `REDIS_URL` (required for cache, distributed rate limits, queue)
+- `CORS_ORIGIN` (recommended for direct frontend->backend in Phase 1, e.g. `https://your-pages-domain.pages.dev`)
 - `ENABLE_BACKGROUND_WORKERS` (`true/false`, optional)
 - `PORT` (optional)
 - `DEV_OTP` (optional for local dev)
 
 ### Worker (Cloudflare)
+
+> Optional in Phase 1. Required only if you run gateway mode.
 
 - `BACKEND_URL` (**Railway public URL, not localhost**)
 - `JWT_SECRET`
@@ -30,7 +35,10 @@
 
 ### Frontend (PWA)
 
-- Frontend must call Worker only. Set worker URL via:
+- Phase 1 (recommended for cost): point frontend directly to Railway backend:
+  - `localStorage.setItem('backendUrl', 'https://<your-railway-backend-domain>')`
+  - or set Cloudflare Pages build variable `backendUrl` (lowercase) so build emits `runtime-config.js`
+- Phase 2 (gateway mode): point frontend to Worker:
   - `localStorage.setItem('workerUrl', 'https://<your-worker-domain>')`
 
 ## Core APIs
@@ -89,7 +97,7 @@ npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
 
 - Health endpoint: `GET /health`
 
-### Worker / Cloudflare
+### Worker / Cloudflare (optional in Phase 1)
 
 ```bash
 wrangler deploy -c apps/worker/wrangler.toml
@@ -104,7 +112,7 @@ wrangler secret put BACKEND_URL
 
 ### Frontend
 
-Deploy static app and point it to Worker URL only.
+Deploy static app and point it to `backendUrl` (Phase 1) or Worker URL (Phase 2).
 
 ## Reference design
 

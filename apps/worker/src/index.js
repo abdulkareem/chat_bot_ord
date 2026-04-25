@@ -44,7 +44,7 @@ function makeCorsHeaders(origin = '*') {
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers': 'authorization,content-type,x-device-id,x-app-id,x-client-channel'
+    'access-control-allow-headers': 'authorization,content-type,x-device-id,x-app-id,x-client-channel,x-api-key'
   };
 }
 
@@ -73,14 +73,6 @@ export default {
       return proxy(new Request(request.url, { method: request.method, headers: request.headers, body: JSON.stringify(payload) }), env, '/auth/verify-otp');
     }
 
-    if (url.pathname === '/chat/message' && request.method === 'POST') {
-      const token = request.headers.get('authorization')?.replace('Bearer ', '');
-      if (!token) return json({ error: 'missing token' }, 401);
-      const claims = await verifyJwt(token, env.JWT_SECRET);
-      if (!claims) return json({ error: 'invalid token' }, 401);
-      return proxy(request, env, '/chat/intent');
-    }
-
     if (url.pathname === '/ws' || url.pathname.startsWith('/realtime/')) {
       const token = request.headers.get('authorization')?.replace('Bearer ', '') || url.searchParams.get('token');
       if (!token) return json({ error: 'missing token' }, 401);
@@ -93,7 +85,7 @@ export default {
 
     const publicRoutes = ['/auth/send-otp', '/auth/verify-otp', '/health'];
     const protectedPrefixes = [
-      '/user/register', '/vendors/nearby', '/drivers/nearby', '/services/nearby', '/chat/initiate', '/chat/save-message', '/order/create', '/history',
+      '/user/register', '/vendors/nearby', '/drivers/nearby', '/services/nearby', '/chat/message', '/chat/initiate', '/chat/save-message', '/order/create', '/history',
       '/onboarding/', '/admin/'
     ];
 

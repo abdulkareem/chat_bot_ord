@@ -1,4 +1,9 @@
-const API = localStorage.getItem('backendUrl') || localStorage.getItem('workerUrl') || 'http://localhost:3000';
+const runtimeConfig = window.__RUNTIME_CONFIG__ || {};
+const API = localStorage.getItem('backendUrl')
+  || runtimeConfig.backendUrl
+  || localStorage.getItem('workerUrl')
+  || 'http://localhost:3000';
+const APP_API_KEY = runtimeConfig.appApiKey || localStorage.getItem('APP_API_KEY') || '';
 const WHATSAPP_VERIFY_NUMBER = '+919744917623';
 let token = localStorage.getItem('token');
 let roomId = null;
@@ -141,7 +146,8 @@ $('verifyPhone').onclick = async () => {
         'content-type': 'application/json',
         'x-device-id': onboardingState.deviceId,
         'x-app-id': 'vyntaro',
-        'x-client-channel': 'pwa'
+        'x-client-channel': 'pwa',
+        ...(APP_API_KEY ? { 'x-api-key': APP_API_KEY } : {})
       },
       body: JSON.stringify({ phone: fullPhone })
     });
@@ -177,7 +183,8 @@ $('verifyOtp').onclick = async () => {
         'content-type': 'application/json',
         'x-device-id': onboardingState.deviceId,
         'x-app-id': 'vyntaro',
-        'x-client-channel': 'pwa'
+        'x-client-channel': 'pwa',
+        ...(APP_API_KEY ? { 'x-api-key': APP_API_KEY } : {})
       },
       body: JSON.stringify({ phone: fullPhone, otp })
     });

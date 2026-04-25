@@ -37,6 +37,7 @@
 
 - Phase 1 (recommended for cost): point frontend directly to Railway backend:
   - `localStorage.setItem('backendUrl', 'https://<your-railway-backend-domain>')`
+  - or set Cloudflare Pages build variable `backendUrl` (lowercase) so build emits `runtime-config.js`
 - Phase 2 (gateway mode): point frontend to Worker:
   - `localStorage.setItem('workerUrl', 'https://<your-worker-domain>')`
 

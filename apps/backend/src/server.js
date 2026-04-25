@@ -33,7 +33,7 @@ const corsOrigin = process.env.CORS_ORIGIN || '*';
 app.use((req, res, next) => {
   res.setHeader('access-control-allow-origin', corsOrigin);
   res.setHeader('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('access-control-allow-headers', 'authorization,content-type,x-device-id,x-app-id,x-client-channel');
+  res.setHeader('access-control-allow-headers', 'authorization,content-type,x-device-id,x-app-id,x-client-channel,x-api-key');
   if (req.method === 'OPTIONS') return res.status(204).end();
   return next();
 });

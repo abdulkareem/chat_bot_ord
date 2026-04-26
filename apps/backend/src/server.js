@@ -363,72 +363,74 @@ function isPaidRole(role) {
 }
 
 async function ensureCoreAuthSchema() {
-  const bootstrapSql = `
-DO $$ BEGIN
-  CREATE TYPE "Role" AS ENUM ('CUSTOMER','VENDOR','DRIVER','SERVICE_AGENT','ADMIN');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN
-  CREATE TYPE "OnboardingStatus" AS ENUM ('PENDING','APPROVED','REJECTED');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-CREATE TABLE IF NOT EXISTS "User" (
-  "id" TEXT PRIMARY KEY,
-  "name" TEXT,
-  "phone" TEXT UNIQUE NOT NULL,
-  "role" "Role" NOT NULL DEFAULT 'CUSTOMER',
-  "countryCode" TEXT DEFAULT '+1',
-  "onboardingStatus" "OnboardingStatus" NOT NULL DEFAULT 'PENDING',
-  "lastLatitude" DOUBLE PRECISION,
-  "lastLongitude" DOUBLE PRECISION,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS "OtpVerification" (
-  "id" TEXT PRIMARY KEY,
-  "userId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
-  "phone" TEXT NOT NULL,
-  "otpHash" TEXT NOT NULL,
-  "expiresAt" TIMESTAMPTZ NOT NULL,
-  "consumedAt" TIMESTAMPTZ,
-  "channel" TEXT NOT NULL DEFAULT 'WHATSAPP',
-  "provider" TEXT NOT NULL DEFAULT 'INTERNAL',
-  "purpose" TEXT NOT NULL DEFAULT 'LOGIN',
-  "metadata" JSONB,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS "OtpVerification_phone_createdAt_idx" ON "OtpVerification" ("phone", "createdAt");
-CREATE INDEX IF NOT EXISTS "OtpVerification_phone_expiresAt_idx" ON "OtpVerification" ("phone", "expiresAt");
-CREATE TABLE IF NOT EXISTS "UserSession" (
-  "id" TEXT PRIMARY KEY,
-  "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
-  "deviceId" TEXT NOT NULL,
-  "jwtId" TEXT UNIQUE NOT NULL,
-  "expiresAt" TIMESTAMPTZ NOT NULL,
-  "revokedAt" TIMESTAMPTZ,
-  "lastSeenAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  "ipAddress" TEXT,
-  "userAgent" TEXT,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS "UserSession_userId_deviceId_idx" ON "UserSession" ("userId", "deviceId");
-CREATE INDEX IF NOT EXISTS "UserSession_expiresAt_revokedAt_idx" ON "UserSession" ("expiresAt", "revokedAt");
-CREATE TABLE IF NOT EXISTS roles (
-  "id" TEXT PRIMARY KEY,
-  "name" TEXT UNIQUE NOT NULL,
-  "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS user_roles (
-  "id" TEXT PRIMARY KEY,
-  "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
-  "roleId" TEXT NOT NULL REFERENCES roles("id") ON DELETE CASCADE,
-  "assignedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE("userId", "roleId")
-);
-CREATE INDEX IF NOT EXISTS "user_roles_roleId_assignedAt_idx" ON user_roles ("roleId", "assignedAt");
-`;
+  const bootstrapStatements = [
+    `DO $$ BEGIN
+      CREATE TYPE "Role" AS ENUM ('CUSTOMER','VENDOR','DRIVER','SERVICE_AGENT','ADMIN');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `DO $$ BEGIN
+      CREATE TYPE "OnboardingStatus" AS ENUM ('PENDING','APPROVED','REJECTED');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `CREATE TABLE IF NOT EXISTS "User" (
+      "id" TEXT PRIMARY KEY,
+      "name" TEXT,
+      "phone" TEXT UNIQUE NOT NULL,
+      "role" "Role" NOT NULL DEFAULT 'CUSTOMER',
+      "countryCode" TEXT DEFAULT '+1',
+      "onboardingStatus" "OnboardingStatus" NOT NULL DEFAULT 'PENDING',
+      "lastLatitude" DOUBLE PRECISION,
+      "lastLongitude" DOUBLE PRECISION,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS "OtpVerification" (
+      "id" TEXT PRIMARY KEY,
+      "userId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
+      "phone" TEXT NOT NULL,
+      "otpHash" TEXT NOT NULL,
+      "expiresAt" TIMESTAMPTZ NOT NULL,
+      "consumedAt" TIMESTAMPTZ,
+      "channel" TEXT NOT NULL DEFAULT 'WHATSAPP',
+      "provider" TEXT NOT NULL DEFAULT 'INTERNAL',
+      "purpose" TEXT NOT NULL DEFAULT 'LOGIN',
+      "metadata" JSONB,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS "OtpVerification_phone_createdAt_idx" ON "OtpVerification" ("phone", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "OtpVerification_phone_expiresAt_idx" ON "OtpVerification" ("phone", "expiresAt")`,
+    `CREATE TABLE IF NOT EXISTS "UserSession" (
+      "id" TEXT PRIMARY KEY,
+      "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+      "deviceId" TEXT NOT NULL,
+      "jwtId" TEXT UNIQUE NOT NULL,
+      "expiresAt" TIMESTAMPTZ NOT NULL,
+      "revokedAt" TIMESTAMPTZ,
+      "lastSeenAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "ipAddress" TEXT,
+      "userAgent" TEXT,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS "UserSession_userId_deviceId_idx" ON "UserSession" ("userId", "deviceId")`,
+    `CREATE INDEX IF NOT EXISTS "UserSession_expiresAt_revokedAt_idx" ON "UserSession" ("expiresAt", "revokedAt")`,
+    `CREATE TABLE IF NOT EXISTS roles (
+      "id" TEXT PRIMARY KEY,
+      "name" TEXT UNIQUE NOT NULL,
+      "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS user_roles (
+      "id" TEXT PRIMARY KEY,
+      "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+      "roleId" TEXT NOT NULL REFERENCES roles("id") ON DELETE CASCADE,
+      "assignedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE("userId", "roleId")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_roleId_assignedAt_idx" ON user_roles ("roleId", "assignedAt")`
+  ];
 
-  await prisma.$executeRawUnsafe(bootstrapSql);
+  for (const statement of bootstrapStatements) {
+    await prisma.$executeRawUnsafe(statement);
+  }
 }
 
 async function syncUserRole(userId, roleName) {

@@ -574,11 +574,46 @@ app.post('/auth/send-otp', async (req, res) => {
     provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_API' : 'DEV'
   });
 
+  const delivery = await sendWhatsAppText(normalizedPhone, `Your VYNTARO OTP is ${otp}. Valid for 5 minutes.`);
+
   return res.json({
     ok: true,
     phone: normalizedPhone,
     expiresAt: expiresAt.toISOString(),
-    delivery: process.env.WHATSAPP_API_URL ? 'whatsapp_api' : 'fallback_simulated',
+    delivery: delivery.delivery,
+    ...(process.env.DEV_OTP ? { otp } : {})
+  });
+});
+
+app.post('/webhooks/whatsapp', async (req, res) => {
+  if (process.env.WHATSAPP_WEBHOOK_SECRET && req.headers['x-webhook-secret'] !== process.env.WHATSAPP_WEBHOOK_SECRET) {
+    return jsonError(res, 401, 'invalid webhook secret');
+  }
+
+  const payload = req.body || {};
+  const inboundText = String(
+    payload?.message || payload?.text?.body || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || ''
+  ).trim().toLowerCase();
+  const fromRaw = payload?.from || payload?.wa_id || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
+  const fromPhone = normalizePhone(fromRaw, detectCountryCode(req));
+
+  if (!fromPhone || !inboundText.includes(WHATSAPP_VERIFY_TRIGGER)) {
+    return res.json({ ok: true, ignored: true });
+  }
+
+  const { otp, expiresAt } = await createOtpVerification({
+    phone: fromPhone,
+    channel: 'WHATSAPP',
+    provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_ROUTER' : 'DEV'
+  });
+
+  const delivery = await sendWhatsAppText(fromPhone, `Your VYNTARO OTP is ${otp}. Valid for 5 minutes.`);
+
+  return res.json({
+    ok: true,
+    phone: fromPhone,
+    expiresAt: expiresAt.toISOString(),
+    delivery: delivery.delivery,
     ...(process.env.DEV_OTP ? { otp } : {})
   });
 });

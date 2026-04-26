@@ -78,6 +78,9 @@ const SUBSCRIPTION_PRICE_BOOK = {
 };
 const LAUNCH_OFFER_END_UTC = new Date('2026-05-31T23:59:59.999Z').getTime();
 
+const WHATSAPP_VERIFY_TRIGGER = 'vyntaro verify my number';
+
+
 const redisEnabled = Boolean(process.env.REDIS_URL);
 const redis = redisEnabled ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 1 }) : null;
 const queueConnection = redisEnabled ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null }) : null;
@@ -136,6 +139,62 @@ function normalizePhone(phone, fallbackCode = '+1') {
 
 function hashOtp(otp) {
   return crypto.createHash('sha256').update(String(otp)).digest('hex');
+}
+
+async function sendWhatsAppText(phone, message) {
+  if (!process.env.WHATSAPP_API_URL || !process.env.WHATSAPP_API_TOKEN) {
+    console.log('whatsapp_send_simulated', { phone, message });
+    return { delivery: 'fallback_simulated' };
+  }
+
+  const response = await fetch(process.env.WHATSAPP_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ to: phone, message })
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    throw new Error(`whatsapp_provider_error:${response.status}:${details.slice(0, 200)}`);
+  }
+
+  return { delivery: 'whatsapp_api' };
+}
+
+async function createOtpVerification({ phone, channel = 'WHATSAPP', provider }) {
+  const otp = String(process.env.DEV_OTP || Math.floor(100000 + Math.random() * 900000));
+  const otpHash = hashOtp(otp);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+  let user = await prisma.user.findUnique({ where: { phone } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        phone,
+        role: Role.CUSTOMER,
+        name: 'New User',
+        countryCode: phone.match(/^\+\d{1,3}/)?.[0] || '+1'
+      }
+    });
+  }
+
+  await prisma.otpVerification.create({
+    data: {
+      userId: user.id,
+      phone,
+      otpHash,
+      expiresAt,
+      channel,
+      provider,
+      purpose: 'LOGIN',
+      metadata: { fallbackChannels: ['SMS', 'EMAIL'] }
+    }
+  });
+
+  return { otp, expiresAt, user };
 }
 
 function isLaunchOfferActive() {
@@ -509,32 +568,10 @@ app.post('/auth/send-otp', async (req, res) => {
   const normalizedPhone = normalizePhone(phone, detectCountryCode(req));
   if (normalizedPhone.length < 10) return jsonError(res, 400, 'invalid_phone');
 
-  const otp = String(process.env.DEV_OTP || Math.floor(100000 + Math.random() * 900000));
-  const otpHash = hashOtp(otp);
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-  let user = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        phone: normalizedPhone,
-        role: Role.CUSTOMER,
-        name: 'New User',
-        countryCode: normalizedPhone.match(/^\+\d{1,3}/)?.[0] || detectCountryCode(req)
-      }
-    });
-  }
-
-  await prisma.otpVerification.create({
-    data: {
-      userId: user.id,
-      phone: normalizedPhone,
-      otpHash,
-      expiresAt,
-      channel,
-      provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_API' : 'DEV',
-      metadata: { fallbackChannels: ['SMS', 'EMAIL'] }
-    }
+  const { otp, expiresAt } = await createOtpVerification({
+    phone: normalizedPhone,
+    channel,
+    provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_API' : 'DEV'
   });
 
   return res.json({
@@ -542,6 +579,39 @@ app.post('/auth/send-otp', async (req, res) => {
     phone: normalizedPhone,
     expiresAt: expiresAt.toISOString(),
     delivery: process.env.WHATSAPP_API_URL ? 'whatsapp_api' : 'fallback_simulated',
+    ...(process.env.DEV_OTP ? { otp } : {})
+  });
+});
+
+app.post('/webhooks/whatsapp', async (req, res) => {
+  if (process.env.WHATSAPP_WEBHOOK_SECRET && req.headers['x-webhook-secret'] !== process.env.WHATSAPP_WEBHOOK_SECRET) {
+    return jsonError(res, 401, 'invalid webhook secret');
+  }
+
+  const payload = req.body || {};
+  const inboundText = String(
+    payload?.message || payload?.text?.body || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || ''
+  ).trim().toLowerCase();
+  const fromRaw = payload?.from || payload?.wa_id || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
+  const fromPhone = normalizePhone(fromRaw, detectCountryCode(req));
+
+  if (!fromPhone || !inboundText.includes(WHATSAPP_VERIFY_TRIGGER)) {
+    return res.json({ ok: true, ignored: true });
+  }
+
+  const { otp, expiresAt } = await createOtpVerification({
+    phone: fromPhone,
+    channel: 'WHATSAPP',
+    provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_ROUTER' : 'DEV'
+  });
+
+  const delivery = await sendWhatsAppText(fromPhone, `Your VYNTARO OTP is ${otp}. Valid for 5 minutes.`);
+
+  return res.json({
+    ok: true,
+    phone: fromPhone,
+    expiresAt: expiresAt.toISOString(),
+    delivery: delivery.delivery,
     ...(process.env.DEV_OTP ? { otp } : {})
   });
 });

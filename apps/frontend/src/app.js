@@ -79,22 +79,44 @@ function detectCountryCodeFromLocale() {
   return COUNTRY_DIAL_CODE_MAP[country] || '+1';
 }
 
-function openWhatsAppVerification() {
+function normalizeUserPhoneInput(rawInput, fallbackCountryCode) {
+  const raw = String(rawInput || '').trim();
+  if (!raw) return '';
+
+  if (raw.startsWith('+')) {
+    const digits = `+${raw.replace(/\D/g, '')}`;
+    return digits.length >= 8 ? digits : '';
+  }
+
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+
+  if (digits.length > 10) {
+    return `+${digits}`;
+  }
+
+  return `${fallbackCountryCode}${digits}`;
+}
+
+function openWhatsAppVerification(preopenedWindow = null) {
   const message = encodeURIComponent('VYNTARO verify my number');
   const waDigits = WHATSAPP_VERIFY_NUMBER.replace(/[^\d]/g, '');
   const deepLink = `whatsapp://send?phone=${waDigits}&text=${message}`;
   const webLink = `https://wa.me/${waDigits}?text=${message}`;
   const browserLink = `https://api.whatsapp.com/send?phone=${waDigits}&text=${message}`;
 
-  const opened = window.open(deepLink, '_blank', 'noopener,noreferrer');
-  if (opened) return true;
-
-  const openedWeb = window.open(webLink, '_blank', 'noopener,noreferrer');
-  if (openedWeb) return true;
+  if (preopenedWindow && !preopenedWindow.closed) {
+    preopenedWindow.location.replace(deepLink);
+    setTimeout(() => {
+      if (!preopenedWindow.closed) preopenedWindow.location.replace(webLink);
+    }, 600);
+    return true;
+  }
 
   window.location.assign(browserLink);
-  return false;
+  return true;
 }
+
 
 function getCurrentPosition() {
   return new Promise((resolve, reject) => {
@@ -128,14 +150,22 @@ async function detectCountryCode() {
 }
 
 $('verifyPhone').onclick = async () => {
-  const localNumber = $('phone').value.trim().replace(/\D/g, '');
-  if (localNumber.length < 8) {
+  const rawPhoneInput = $('phone').value.trim();
+  if (!rawPhoneInput) {
     $('phoneHint').textContent = 'Please enter a valid WhatsApp number.';
     return;
   }
 
+  const popupWindow = window.open('about:blank', '_blank', 'noopener,noreferrer');
+
   const countryCode = await detectCountryCode();
-  fullPhone = `${countryCode}${localNumber}`;
+  fullPhone = normalizeUserPhoneInput(rawPhoneInput, countryCode);
+  if (!fullPhone || fullPhone.replace(/\D/g, '').length < 8) {
+    if (popupWindow && !popupWindow.closed) popupWindow.close();
+    $('phoneHint').textContent = 'Please enter a valid WhatsApp number.';
+    return;
+  }
+
   onboardingState.profile.phone = fullPhone;
   $('phoneHint').textContent = `Detected ${countryCode}. We will verify ${fullPhone}`;
 
@@ -154,11 +184,12 @@ $('verifyPhone').onclick = async () => {
     if (!res.ok) throw new Error('Failed to initiate WhatsApp verification');
 
     showSlide('otp');
-    const opened = openWhatsAppVerification();
+    const opened = openWhatsAppVerification(popupWindow);
     $('otpHint').textContent = opened
       ? 'After sending the WhatsApp message, wait for OTP and enter it here.'
       : 'WhatsApp did not open automatically. Tap "Open WhatsApp" below, send the message, then enter OTP.';
   } catch {
+    if (popupWindow && !popupWindow.closed) popupWindow.close();
     $('phoneHint').textContent = 'Could not start WhatsApp verification. Please retry.';
   }
 };

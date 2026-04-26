@@ -90,7 +90,8 @@ cd apps/frontend && npm run dev
 
 ### Backend / Railway
 
-- Start command: `node apps/backend/src/server.js` (or workspace start script)
+- Start command: `npm --prefix apps/backend run start` (runs `prisma db push` before boot to ensure tables exist)
+- Backend also includes startup SQL bootstrap for core auth tables (`User`, `OtpVerification`, `UserSession`, `roles`, `user_roles`) if DB is empty.
 - Ensure Prisma migrate runs:
 
 ```bash

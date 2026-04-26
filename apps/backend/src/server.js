@@ -78,6 +78,9 @@ const SUBSCRIPTION_PRICE_BOOK = {
 };
 const LAUNCH_OFFER_END_UTC = new Date('2026-05-31T23:59:59.999Z').getTime();
 
+const WHATSAPP_VERIFY_TRIGGER = 'vyntaro verify my number';
+
+
 const redisEnabled = Boolean(process.env.REDIS_URL);
 const redis = redisEnabled ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 1 }) : null;
 const queueConnection = redisEnabled ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null }) : null;
@@ -136,6 +139,62 @@ function normalizePhone(phone, fallbackCode = '+1') {
 
 function hashOtp(otp) {
   return crypto.createHash('sha256').update(String(otp)).digest('hex');
+}
+
+async function sendWhatsAppText(phone, message) {
+  if (!process.env.WHATSAPP_API_URL || !process.env.WHATSAPP_API_TOKEN) {
+    console.log('whatsapp_send_simulated', { phone, message });
+    return { delivery: 'fallback_simulated' };
+  }
+
+  const response = await fetch(process.env.WHATSAPP_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ to: phone, message })
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    throw new Error(`whatsapp_provider_error:${response.status}:${details.slice(0, 200)}`);
+  }
+
+  return { delivery: 'whatsapp_api' };
+}
+
+async function createOtpVerification({ phone, channel = 'WHATSAPP', provider }) {
+  const otp = String(process.env.DEV_OTP || Math.floor(100000 + Math.random() * 900000));
+  const otpHash = hashOtp(otp);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+  let user = await prisma.user.findUnique({ where: { phone } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        phone,
+        role: Role.CUSTOMER,
+        name: 'New User',
+        countryCode: phone.match(/^\+\d{1,3}/)?.[0] || '+1'
+      }
+    });
+  }
+
+  await prisma.otpVerification.create({
+    data: {
+      userId: user.id,
+      phone,
+      otpHash,
+      expiresAt,
+      channel,
+      provider,
+      purpose: 'LOGIN',
+      metadata: { fallbackChannels: ['SMS', 'EMAIL'] }
+    }
+  });
+
+  return { otp, expiresAt, user };
 }
 
 function isLaunchOfferActive() {
@@ -363,72 +422,74 @@ function isPaidRole(role) {
 }
 
 async function ensureCoreAuthSchema() {
-  const bootstrapSql = `
-DO $$ BEGIN
-  CREATE TYPE "Role" AS ENUM ('CUSTOMER','VENDOR','DRIVER','SERVICE_AGENT','ADMIN');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN
-  CREATE TYPE "OnboardingStatus" AS ENUM ('PENDING','APPROVED','REJECTED');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-CREATE TABLE IF NOT EXISTS "User" (
-  "id" TEXT PRIMARY KEY,
-  "name" TEXT,
-  "phone" TEXT UNIQUE NOT NULL,
-  "role" "Role" NOT NULL DEFAULT 'CUSTOMER',
-  "countryCode" TEXT DEFAULT '+1',
-  "onboardingStatus" "OnboardingStatus" NOT NULL DEFAULT 'PENDING',
-  "lastLatitude" DOUBLE PRECISION,
-  "lastLongitude" DOUBLE PRECISION,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS "OtpVerification" (
-  "id" TEXT PRIMARY KEY,
-  "userId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
-  "phone" TEXT NOT NULL,
-  "otpHash" TEXT NOT NULL,
-  "expiresAt" TIMESTAMPTZ NOT NULL,
-  "consumedAt" TIMESTAMPTZ,
-  "channel" TEXT NOT NULL DEFAULT 'WHATSAPP',
-  "provider" TEXT NOT NULL DEFAULT 'INTERNAL',
-  "purpose" TEXT NOT NULL DEFAULT 'LOGIN',
-  "metadata" JSONB,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS "OtpVerification_phone_createdAt_idx" ON "OtpVerification" ("phone", "createdAt");
-CREATE INDEX IF NOT EXISTS "OtpVerification_phone_expiresAt_idx" ON "OtpVerification" ("phone", "expiresAt");
-CREATE TABLE IF NOT EXISTS "UserSession" (
-  "id" TEXT PRIMARY KEY,
-  "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
-  "deviceId" TEXT NOT NULL,
-  "jwtId" TEXT UNIQUE NOT NULL,
-  "expiresAt" TIMESTAMPTZ NOT NULL,
-  "revokedAt" TIMESTAMPTZ,
-  "lastSeenAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  "ipAddress" TEXT,
-  "userAgent" TEXT,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS "UserSession_userId_deviceId_idx" ON "UserSession" ("userId", "deviceId");
-CREATE INDEX IF NOT EXISTS "UserSession_expiresAt_revokedAt_idx" ON "UserSession" ("expiresAt", "revokedAt");
-CREATE TABLE IF NOT EXISTS roles (
-  "id" TEXT PRIMARY KEY,
-  "name" TEXT UNIQUE NOT NULL,
-  "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
-  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS user_roles (
-  "id" TEXT PRIMARY KEY,
-  "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
-  "roleId" TEXT NOT NULL REFERENCES roles("id") ON DELETE CASCADE,
-  "assignedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE("userId", "roleId")
-);
-CREATE INDEX IF NOT EXISTS "user_roles_roleId_assignedAt_idx" ON user_roles ("roleId", "assignedAt");
-`;
+  const bootstrapStatements = [
+    `DO $$ BEGIN
+      CREATE TYPE "Role" AS ENUM ('CUSTOMER','VENDOR','DRIVER','SERVICE_AGENT','ADMIN');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `DO $$ BEGIN
+      CREATE TYPE "OnboardingStatus" AS ENUM ('PENDING','APPROVED','REJECTED');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+    `CREATE TABLE IF NOT EXISTS "User" (
+      "id" TEXT PRIMARY KEY,
+      "name" TEXT,
+      "phone" TEXT UNIQUE NOT NULL,
+      "role" "Role" NOT NULL DEFAULT 'CUSTOMER',
+      "countryCode" TEXT DEFAULT '+1',
+      "onboardingStatus" "OnboardingStatus" NOT NULL DEFAULT 'PENDING',
+      "lastLatitude" DOUBLE PRECISION,
+      "lastLongitude" DOUBLE PRECISION,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS "OtpVerification" (
+      "id" TEXT PRIMARY KEY,
+      "userId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
+      "phone" TEXT NOT NULL,
+      "otpHash" TEXT NOT NULL,
+      "expiresAt" TIMESTAMPTZ NOT NULL,
+      "consumedAt" TIMESTAMPTZ,
+      "channel" TEXT NOT NULL DEFAULT 'WHATSAPP',
+      "provider" TEXT NOT NULL DEFAULT 'INTERNAL',
+      "purpose" TEXT NOT NULL DEFAULT 'LOGIN',
+      "metadata" JSONB,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS "OtpVerification_phone_createdAt_idx" ON "OtpVerification" ("phone", "createdAt")`,
+    `CREATE INDEX IF NOT EXISTS "OtpVerification_phone_expiresAt_idx" ON "OtpVerification" ("phone", "expiresAt")`,
+    `CREATE TABLE IF NOT EXISTS "UserSession" (
+      "id" TEXT PRIMARY KEY,
+      "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+      "deviceId" TEXT NOT NULL,
+      "jwtId" TEXT UNIQUE NOT NULL,
+      "expiresAt" TIMESTAMPTZ NOT NULL,
+      "revokedAt" TIMESTAMPTZ,
+      "lastSeenAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "ipAddress" TEXT,
+      "userAgent" TEXT,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS "UserSession_userId_deviceId_idx" ON "UserSession" ("userId", "deviceId")`,
+    `CREATE INDEX IF NOT EXISTS "UserSession_expiresAt_revokedAt_idx" ON "UserSession" ("expiresAt", "revokedAt")`,
+    `CREATE TABLE IF NOT EXISTS roles (
+      "id" TEXT PRIMARY KEY,
+      "name" TEXT UNIQUE NOT NULL,
+      "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS user_roles (
+      "id" TEXT PRIMARY KEY,
+      "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+      "roleId" TEXT NOT NULL REFERENCES roles("id") ON DELETE CASCADE,
+      "assignedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE("userId", "roleId")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_roleId_assignedAt_idx" ON user_roles ("roleId", "assignedAt")`
+  ];
 
-  await prisma.$executeRawUnsafe(bootstrapSql);
+  for (const statement of bootstrapStatements) {
+    await prisma.$executeRawUnsafe(statement);
+  }
 }
 
 async function syncUserRole(userId, roleName) {
@@ -507,39 +568,52 @@ app.post('/auth/send-otp', async (req, res) => {
   const normalizedPhone = normalizePhone(phone, detectCountryCode(req));
   if (normalizedPhone.length < 10) return jsonError(res, 400, 'invalid_phone');
 
-  const otp = String(process.env.DEV_OTP || Math.floor(100000 + Math.random() * 900000));
-  const otpHash = hashOtp(otp);
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-  let user = await prisma.user.findUnique({ where: { phone: normalizedPhone } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        phone: normalizedPhone,
-        role: Role.CUSTOMER,
-        name: 'New User',
-        countryCode: normalizedPhone.match(/^\+\d{1,3}/)?.[0] || detectCountryCode(req)
-      }
-    });
-  }
-
-  await prisma.otpVerification.create({
-    data: {
-      userId: user.id,
-      phone: normalizedPhone,
-      otpHash,
-      expiresAt,
-      channel,
-      provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_API' : 'DEV',
-      metadata: { fallbackChannels: ['SMS', 'EMAIL'] }
-    }
+  const { otp, expiresAt } = await createOtpVerification({
+    phone: normalizedPhone,
+    channel,
+    provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_API' : 'DEV'
   });
+
+  const delivery = await sendWhatsAppText(normalizedPhone, `Your VYNTARO OTP is ${otp}. Valid for 5 minutes.`);
 
   return res.json({
     ok: true,
     phone: normalizedPhone,
     expiresAt: expiresAt.toISOString(),
-    delivery: process.env.WHATSAPP_API_URL ? 'whatsapp_api' : 'fallback_simulated',
+    delivery: delivery.delivery,
+    ...(process.env.DEV_OTP ? { otp } : {})
+  });
+});
+
+app.post('/webhooks/whatsapp', async (req, res) => {
+  if (process.env.WHATSAPP_WEBHOOK_SECRET && req.headers['x-webhook-secret'] !== process.env.WHATSAPP_WEBHOOK_SECRET) {
+    return jsonError(res, 401, 'invalid webhook secret');
+  }
+
+  const payload = req.body || {};
+  const inboundText = String(
+    payload?.message || payload?.text?.body || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || ''
+  ).trim().toLowerCase();
+  const fromRaw = payload?.from || payload?.wa_id || payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
+  const fromPhone = normalizePhone(fromRaw, detectCountryCode(req));
+
+  if (!fromPhone || !inboundText.includes(WHATSAPP_VERIFY_TRIGGER)) {
+    return res.json({ ok: true, ignored: true });
+  }
+
+  const { otp, expiresAt } = await createOtpVerification({
+    phone: fromPhone,
+    channel: 'WHATSAPP',
+    provider: process.env.WHATSAPP_API_URL ? 'WHATSAPP_ROUTER' : 'DEV'
+  });
+
+  const delivery = await sendWhatsAppText(fromPhone, `Your VYNTARO OTP is ${otp}. Valid for 5 minutes.`);
+
+  return res.json({
+    ok: true,
+    phone: fromPhone,
+    expiresAt: expiresAt.toISOString(),
+    delivery: delivery.delivery,
     ...(process.env.DEV_OTP ? { otp } : {})
   });
 });

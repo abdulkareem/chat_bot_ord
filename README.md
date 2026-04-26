@@ -95,7 +95,7 @@ cd apps/frontend && npm run dev
 - Ensure Prisma migrate runs:
 
 ```bash
-npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
+npx prisma migrate deploy --schema apps/backend/prisma/schema.prisma
 ```
 
 - Health endpoint: `GET /health`

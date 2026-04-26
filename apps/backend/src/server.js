@@ -25,9 +25,26 @@ import {
 import { attachChatWebSocketServer } from './chat/ws-server.js';
 import { routeChatMessage } from './chat/chat-router.js';
 
+process.on('unhandledRejection', (error) => {
+  console.error('unhandled_rejection', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('uncaught_exception', error);
+});
+
 const app = express();
 const prisma = new PrismaClient();
 app.use(express.json({ limit: '1mb' }));
+
+const corsOrigin = process.env.CORS_ORIGIN || '*';
+app.use((req, res, next) => {
+  res.setHeader('access-control-allow-origin', corsOrigin);
+  res.setHeader('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('access-control-allow-headers', 'authorization,content-type,x-device-id,x-app-id,x-client-channel,x-api-key');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  return next();
+});
 
 const inMemoryCache = new Map();
 const inMemoryRateLimit = new Map();
@@ -226,6 +243,89 @@ function intentFromMessage(text) {
   return { intent: LeadIntent.SHOPPING, keyword: msg.replace(/i need|want|buy|shop|shopping/gi, '').trim() || msg.trim() };
 }
 
+function chatModuleToIntent(module) {
+  if (module === 'AUTO' || module === 'TAXI') return LeadIntent.AUTO;
+  if (module === 'SERVICE') return LeadIntent.SERVICE;
+  if (module === 'SHOPPING') return LeadIntent.SHOPPING;
+  return LeadIntent.UNKNOWN;
+}
+
+async function discoverNearbyByModule({ prisma, module, sourceLat, sourceLng, maxResults = 5 }) {
+  if (!module || !Number.isFinite(sourceLat) || !Number.isFinite(sourceLng)) return [];
+  const box = boundingBox(sourceLat, sourceLng, 8);
+
+  if (module === 'SHOPPING') {
+    const vendors = await prisma.vendor.findMany({
+      where: {
+        status: VendorStatus.ACTIVE,
+        latitude: { gte: box.minLat, lte: box.maxLat },
+        longitude: { gte: box.minLng, lte: box.maxLng }
+      },
+      include: { user: { select: { name: true, phone: true } } },
+      take: 15
+    });
+    return vendors
+      .map((v) => ({
+        id: v.id,
+        kind: 'vendor',
+        name: v.user?.name || 'Vendor',
+        distanceKm: distanceKm(sourceLat, sourceLng, v.latitude, v.longitude),
+        whatsappLink: `https://wa.me/${(v.user?.phone || '').replace(/[^\d]/g, '')}`
+      }))
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, maxResults);
+  }
+
+  if (module === 'AUTO' || module === 'TAXI') {
+    const drivers = await prisma.driver.findMany({
+      where: {
+        isAvailable: true,
+        vehicleType: module === 'AUTO' ? VehicleType.AUTO : VehicleType.TAXI,
+        user: {
+          lastLatitude: { gte: box.minLat, lte: box.maxLat },
+          lastLongitude: { gte: box.minLng, lte: box.maxLng }
+        }
+      },
+      include: { user: { select: { name: true, phone: true, lastLatitude: true, lastLongitude: true } } },
+      take: 15
+    });
+    return drivers
+      .map((d) => ({
+        id: d.id,
+        kind: 'driver',
+        name: d.user?.name || `${module} Driver`,
+        vehicleType: d.vehicleType,
+        distanceKm: distanceKm(sourceLat, sourceLng, d.user?.lastLatitude || sourceLat, d.user?.lastLongitude || sourceLng),
+        whatsappLink: `https://wa.me/${(d.user?.phone || '').replace(/[^\d]/g, '')}`
+      }))
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, maxResults);
+  }
+
+  const agents = await prisma.serviceAgent.findMany({
+    where: {
+      isAvailable: true,
+      user: {
+        lastLatitude: { gte: box.minLat, lte: box.maxLat },
+        lastLongitude: { gte: box.minLng, lte: box.maxLng }
+      }
+    },
+    include: { user: { select: { name: true, phone: true, lastLatitude: true, lastLongitude: true } } },
+    take: 15
+  });
+  return agents
+    .map((agent) => ({
+      id: agent.id,
+      kind: 'service_agent',
+      name: agent.user?.name || 'Service Provider',
+      serviceType: agent.serviceType,
+      distanceKm: distanceKm(sourceLat, sourceLng, agent.user?.lastLatitude || sourceLat, agent.user?.lastLongitude || sourceLng),
+      whatsappLink: `https://wa.me/${(agent.user?.phone || '').replace(/[^\d]/g, '')}`
+    }))
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .slice(0, maxResults);
+}
+
 async function cacheGet(cacheKey) {
   if (redis) {
     const value = await redis.get(cacheKey);
@@ -260,6 +360,75 @@ function buildVendorScore(candidate) {
 
 function isPaidRole(role) {
   return [Role.VENDOR, Role.DRIVER, Role.SERVICE_AGENT].includes(role);
+}
+
+async function ensureCoreAuthSchema() {
+  const bootstrapSql = `
+DO $$ BEGIN
+  CREATE TYPE "Role" AS ENUM ('CUSTOMER','VENDOR','DRIVER','SERVICE_AGENT','ADMIN');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE TYPE "OnboardingStatus" AS ENUM ('PENDING','APPROVED','REJECTED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE TABLE IF NOT EXISTS "User" (
+  "id" TEXT PRIMARY KEY,
+  "name" TEXT,
+  "phone" TEXT UNIQUE NOT NULL,
+  "role" "Role" NOT NULL DEFAULT 'CUSTOMER',
+  "countryCode" TEXT DEFAULT '+1',
+  "onboardingStatus" "OnboardingStatus" NOT NULL DEFAULT 'PENDING',
+  "lastLatitude" DOUBLE PRECISION,
+  "lastLongitude" DOUBLE PRECISION,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS "OtpVerification" (
+  "id" TEXT PRIMARY KEY,
+  "userId" TEXT REFERENCES "User"("id") ON DELETE SET NULL,
+  "phone" TEXT NOT NULL,
+  "otpHash" TEXT NOT NULL,
+  "expiresAt" TIMESTAMPTZ NOT NULL,
+  "consumedAt" TIMESTAMPTZ,
+  "channel" TEXT NOT NULL DEFAULT 'WHATSAPP',
+  "provider" TEXT NOT NULL DEFAULT 'INTERNAL',
+  "purpose" TEXT NOT NULL DEFAULT 'LOGIN',
+  "metadata" JSONB,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS "OtpVerification_phone_createdAt_idx" ON "OtpVerification" ("phone", "createdAt");
+CREATE INDEX IF NOT EXISTS "OtpVerification_phone_expiresAt_idx" ON "OtpVerification" ("phone", "expiresAt");
+CREATE TABLE IF NOT EXISTS "UserSession" (
+  "id" TEXT PRIMARY KEY,
+  "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+  "deviceId" TEXT NOT NULL,
+  "jwtId" TEXT UNIQUE NOT NULL,
+  "expiresAt" TIMESTAMPTZ NOT NULL,
+  "revokedAt" TIMESTAMPTZ,
+  "lastSeenAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "ipAddress" TEXT,
+  "userAgent" TEXT,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS "UserSession_userId_deviceId_idx" ON "UserSession" ("userId", "deviceId");
+CREATE INDEX IF NOT EXISTS "UserSession_expiresAt_revokedAt_idx" ON "UserSession" ("expiresAt", "revokedAt");
+CREATE TABLE IF NOT EXISTS roles (
+  "id" TEXT PRIMARY KEY,
+  "name" TEXT UNIQUE NOT NULL,
+  "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS user_roles (
+  "id" TEXT PRIMARY KEY,
+  "userId" TEXT NOT NULL REFERENCES "User"("id") ON DELETE CASCADE,
+  "roleId" TEXT NOT NULL REFERENCES roles("id") ON DELETE CASCADE,
+  "assignedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE("userId", "roleId")
+);
+CREATE INDEX IF NOT EXISTS "user_roles_roleId_assignedAt_idx" ON user_roles ("roleId", "assignedAt");
+`;
+
+  await prisma.$executeRawUnsafe(bootstrapSql);
 }
 
 async function syncUserRole(userId, roleName) {
@@ -527,12 +696,46 @@ app.post('/chat/intent', auth, rateLimit, async (req, res) => {
 });
 
 app.post('/chat/message', auth, rateLimit, async (req, res) => {
-  const { message } = req.body || {};
+  const { message, lat, lng } = req.body || {};
   const routed = await routeChatMessage({ prisma, userId: req.user.sub, message });
+  const customer = await prisma.user.findUnique({ where: { id: req.user.sub } });
+  const sourceLat = Number.isFinite(Number(lat)) ? Number(lat) : customer?.lastLatitude;
+  const sourceLng = Number.isFinite(Number(lng)) ? Number(lng) : customer?.lastLongitude;
+  const nearby = await discoverNearbyByModule({
+    prisma,
+    module: routed.module,
+    sourceLat,
+    sourceLng,
+    maxResults: 5
+  });
+
+  const quickReplies = routed.quickReplies?.length
+    ? routed.quickReplies
+    : routed.serviceMenu?.length
+      ? routed.serviceMenu.map((service) => service.name)
+      : ['menu'];
+
+  if (routed.module) {
+    await prisma.lead.create({
+      data: {
+        customerId: req.user.sub,
+        intent: chatModuleToIntent(routed.module),
+        query: String(message || ''),
+        status: nearby.length ? LeadStatus.QUALIFIED : LeadStatus.OPEN,
+        metadata: {
+          source: 'chat_message',
+          module: routed.module,
+          hasLocation: Boolean(Number.isFinite(sourceLat) && Number.isFinite(sourceLng)),
+          matchedCount: nearby.length
+        }
+      }
+    }).catch(() => {});
+  }
+
   const response = {
-    intent: routed.service?.name || 'SERVICE_SELECTION',
-    quickReplies: routed.serviceMenu?.length ? routed.serviceMenu.map((service) => service.name) : ['menu'],
-    results: [],
+    intent: routed.module || routed.service?.name || 'SERVICE_SELECTION',
+    quickReplies,
+    results: nearby,
     reply: routed.reply,
     session: routed.session
   };
@@ -642,6 +845,56 @@ app.post('/chat/wa-link', auth, async (req, res) => {
       initiateEndpoint: '/chat/initiate'
     }
   });
+});
+
+app.post('/chat/initiate', auth, async (req, res) => {
+  const { vendorId, driverId } = req.body || {};
+  if (!vendorId && !driverId) return jsonError(res, 400, 'vendorId or driverId required');
+
+  const room = await prisma.chatRoom.upsert({
+    where: {
+      id: `${req.user.sub}:${vendorId || ''}:${driverId || ''}`
+    },
+    update: { updatedAt: new Date() },
+    create: {
+      id: `${req.user.sub}:${vendorId || ''}:${driverId || ''}`,
+      customerId: req.user.sub,
+      vendorId: vendorId || null,
+      driverId: driverId || null
+    }
+  }).catch(async () => {
+    const existing = await prisma.chatRoom.findFirst({
+      where: {
+        customerId: req.user.sub,
+        vendorId: vendorId || null,
+        driverId: driverId || null
+      },
+      orderBy: { updatedAt: 'desc' }
+    });
+    if (existing) return existing;
+    return prisma.chatRoom.create({
+      data: {
+        customerId: req.user.sub,
+        vendorId: vendorId || null,
+        driverId: driverId || null
+      }
+    });
+  });
+
+  return res.status(201).json({ chatRoom: room });
+});
+
+app.post('/chat/save-message', auth, async (req, res) => {
+  const { chatRoomId, message } = req.body || {};
+  if (!chatRoomId || !message) return jsonError(res, 400, 'chatRoomId and message required');
+
+  const room = await prisma.chatRoom.findUnique({ where: { id: chatRoomId } });
+  if (!room || room.customerId !== req.user.sub) return jsonError(res, 403, 'forbidden');
+
+  const saved = await prisma.message.create({
+    data: { chatRoomId, senderId: req.user.sub, message: String(message) }
+  });
+  return res.status(201).json({ message: saved });
 });
 
 app.post('/vendors/:id/boost', auth, allow(Role.VENDOR, Role.ADMIN), rateLimit, async (req, res) => {
@@ -932,7 +1185,17 @@ attachChatWebSocketServer({
   redis
 });
 
-server.listen(port, () => {
-  console.log(`backend listening on ${port}`);
-  console.log(`redis enabled: ${redisEnabled}`);
-});
+async function boot() {
+  try {
+    await ensureCoreAuthSchema();
+  } catch (error) {
+    console.error('schema_bootstrap_failed', error);
+  }
+
+  server.listen(port, () => {
+    console.log(`backend listening on ${port}`);
+    console.log(`redis enabled: ${redisEnabled}`);
+  });
+}
+
+boot();
